@@ -460,7 +460,7 @@ def run_job(job: dict, port: int, worker_id: int = 0,
             cost = stats.get("cost_usd", 0)
             ws = get_state(worker_id)
             prev_cost = ws.total_cost if ws else 0.0
-            update_state(worker_id, total_cost=prev_cost + cost)
+            update_state(worker_id, last_job_cost=cost, total_cost=prev_cost + cost)
 
         def _clean_reason(s: str) -> str:
             return re.sub(r'[*`"]+$', '', s).strip()

@@ -85,6 +85,27 @@ def _build_skills_set(profile: dict) -> set[str]:
     return allowed
 
 
+def _find_fabricated_watchlist_hits(text: str, profile: dict, original_text: str = "") -> list[str]:
+    """Return watchlist hits that are not already allowed by the profile/original resume."""
+    text_lower = text.lower()
+    original_lower = original_text.lower()
+    allowed_skills = _build_skills_set(profile)
+    hits: list[str] = []
+
+    for fake in FABRICATION_WATCHLIST:
+        if len(fake) <= 2:
+            continue
+        if fake not in text_lower:
+            continue
+        if fake in allowed_skills:
+            continue
+        if original_lower and fake in original_lower:
+            continue
+        hits.append(fake)
+
+    return hits
+
+
 def sanitize_text(text: str) -> str:
     """Auto-fix common LLM output issues instead of rejecting."""
     text = text.replace(" \u2014 ", ", ").replace("\u2014", ", ")   # em dash -> comma
@@ -126,11 +147,8 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dic
     # Skills: check for fabrication (always enforced)
     if isinstance(data["skills"], dict):
         skills_text = " ".join(str(v) for v in data["skills"].values()).lower()
-        for fake in FABRICATION_WATCHLIST:
-            if len(fake) <= 2:
-                continue
-            if fake in skills_text:
-                errors.append(f"Fabricated skill: '{fake}'")
+        for fake in _find_fabricated_watchlist_hits(skills_text, profile):
+            errors.append(f"Fabricated skill: '{fake}'")
 
     # Experience: preserved companies must be present (always enforced)
     resume_facts = profile.get("resume_facts", {})
@@ -247,20 +265,12 @@ def validate_tailored_resume(text: str, profile: dict, original_text: str = "") 
     skills_end = text_lower.find("experience", skills_start) if skills_start != -1 else -1
     if skills_start != -1 and skills_end != -1:
         skills_block = text_lower[skills_start:skills_end]
-        for fake in FABRICATION_WATCHLIST:
-            if len(fake) <= 2:
-                continue
-            if fake in skills_block:
-                errors.append(f"FABRICATED SKILL in Technical Skills: '{fake}'")
+        for fake in _find_fabricated_watchlist_hits(skills_block, profile, original_text):
+            errors.append(f"FABRICATED SKILL in Technical Skills: '{fake}'")
 
     # 8. Scan full document for fabrication watchlist items not in original
-    if original_text:
-        original_lower = original_text.lower()
-        for fake in FABRICATION_WATCHLIST:
-            if len(fake) <= 2:
-                continue
-            if fake in text_lower and fake not in original_lower:
-                warnings.append(f"New tool/skill appeared: '{fake}' (not in original)")
+    for fake in _find_fabricated_watchlist_hits(text, profile, original_text):
+        warnings.append(f"New tool/skill appeared: '{fake}' (not in original)")
 
     # 9. Em dashes (should be auto-fixed by sanitize_text, but safety net)
     if "\u2014" in text or "\u2013" in text:

@@ -22,13 +22,12 @@ https://github.com/user-attachments/assets/7ee3417f-43d4-4245-9952-35df1e77f2df
 
 ## What It Does
 
-ApplyPilot is a 6-stage autonomous job application pipeline. It discovers jobs across 5+ boards, scores them against your resume with AI, tailors your resume per job, writes cover letters, and **submits applications for you**. It navigates forms, uploads documents, answers screening questions, all hands-free.
+ApplyPilot is a 6-stage autonomous job application pipeline. It discovers jobs from official Workday, Greenhouse, and Lever company portals, scores them against your resume with AI, tailors your resume per job, writes cover letters, and **submits applications for you**. It navigates forms, uploads documents, answers screening questions, all hands-free.
 
-Three commands. That's it.
+Typical flow:
 
 ```bash
 pip install applypilot
-pip install --no-deps python-jobspy && pip install pydantic tls-client requests markdownify regex
 applypilot init          # one-time setup: resume, profile, preferences, API keys
 applypilot doctor        # verify your setup — shows what's installed and what's missing
 applypilot run           # discover > enrich > score > tailor > cover letters
@@ -38,19 +37,55 @@ applypilot apply -w 3    # parallel apply (3 Chrome instances)
 applypilot apply --dry-run  # fill forms without submitting
 ```
 
-> **Why two install commands?** `python-jobspy` pins an exact numpy version in its metadata that conflicts with pip's resolver, but works fine at runtime with any modern numpy. The `--no-deps` flag bypasses the resolver; the second command installs jobspy's actual runtime dependencies. Everything except `python-jobspy` installs normally.
+---
+
+## Mental Model
+
+The most important distinction in ApplyPilot is:
+
+- `applypilot run` prepares applications. It does **not** submit anything.
+- `applypilot apply` opens the browser and **does** submit applications unless you use `--dry-run`.
+- `applypilot apply --dry-run` is the safe review mode: it fills and checks forms, but does not click the final submit button.
+
+If you are new to the project, think of `run` as the research and document-prep pipeline, and `apply` as the browser automation step.
+
+---
+
+## Recommended First Run
+
+If you do not want fully autonomous submission on day one, use this workflow:
+
+```bash
+applypilot init
+applypilot doctor
+applypilot run
+applypilot status
+applypilot dashboard
+applypilot apply --dry-run --url "JOB_URL"
+applypilot apply --url "JOB_URL"
+```
+
+Recommended safety settings for your first few real applications:
+
+- use `--url` to target one job at a time
+- use `--workers 1`
+- do **not** use `--continuous`
+- do **not** use `--headless`
+- keep Chrome visible while it runs
+
+This gives you a practical human-in-the-loop workflow even though the default `apply` mode is autonomous.
 
 ---
 
 ## Two Paths
 
 ### Full Pipeline (recommended)
-**Requires:** Python 3.11+, Node.js (for npx), Gemini API key (free), Claude Code CLI, Chrome
+**Requires:** Python 3.11+, Node.js (for npx), an LLM provider (Gemini, OpenAI, or local), Claude Code CLI, Chrome
 
 Runs all 6 stages, from job discovery to autonomous application submission. This is the full power of ApplyPilot.
 
 ### Discovery + Tailoring Only
-**Requires:** Python 3.11+, Gemini API key (free)
+**Requires:** Python 3.11+, an LLM provider (Gemini, OpenAI, or local)
 
 Runs stages 1-5: discovers jobs, scores them, tailors your resume, generates cover letters. You submit applications manually with the AI-prepared materials.
 
@@ -60,7 +95,7 @@ Runs stages 1-5: discovers jobs, scores them, tailors your resume, generates cov
 
 | Stage | What Happens |
 |-------|-------------|
-| **1. Discover** | Scrapes 5 job boards (Indeed, LinkedIn, Glassdoor, ZipRecruiter, Google Jobs) + 48 Workday employer portals + 30 direct career sites |
+| **1. Discover** | Scrapes 51 Workday employer portals + 47 Greenhouse company boards + 16 Lever company boards |
 | **2. Enrich** | Fetches full job descriptions via JSON-LD, CSS selectors, or AI-powered extraction |
 | **3. Score** | AI rates every job 1-10 based on your resume and preferences. Only high-fit jobs proceed |
 | **4. Tailor** | AI rewrites your resume per job: reorganizes, emphasizes relevant experience, adds keywords. Never fabricates |
@@ -75,11 +110,11 @@ Each stage is independent. Run them all or pick what you need.
 
 | Feature | ApplyPilot | AIHawk | Manual |
 |---------|-----------|--------|--------|
-| Job discovery | 5 boards + Workday + direct sites | LinkedIn only | One board at a time |
+| Job discovery | Official ATS only: Workday + Greenhouse + Lever | LinkedIn only | One board at a time |
 | AI scoring | 1-10 fit score per job | Basic filtering | Your gut feeling |
 | Resume tailoring | Per-job AI rewrite | Template-based | Hours per application |
 | Auto-apply | Full form navigation + submission | LinkedIn Easy Apply only | Click, type, repeat |
-| Supported sites | Indeed, LinkedIn, Glassdoor, ZipRecruiter, Google Jobs, 46 Workday portals, 28 direct sites | LinkedIn | Whatever you open |
+| Supported sites | 51 Workday portals, 47 Greenhouse boards, 16 Lever boards | LinkedIn | Whatever you open |
 | License | AGPL-3.0 | MIT | N/A |
 
 ---
@@ -90,7 +125,7 @@ Each stage is independent. Run them all or pick what you need.
 |-----------|-------------|---------|
 | Python 3.11+ | Everything | Core runtime |
 | Node.js 18+ | Auto-apply | Needed for `npx` to run Playwright MCP server |
-| Gemini API key | Scoring, tailoring, cover letters | Free tier (15 RPM / 1M tokens/day) is enough |
+| LLM provider | Scoring, tailoring, cover letters | Gemini, OpenAI, or a local OpenAI-compatible endpoint |
 | Chrome/Chromium | Auto-apply | Auto-detected on most systems |
 | Claude Code CLI | Auto-apply | Install from [claude.ai/code](https://claude.ai/code) |
 
@@ -102,34 +137,69 @@ Each stage is independent. Run them all or pick what you need.
 |-----------|-------------|
 | CapSolver API key | Solves CAPTCHAs during auto-apply (hCaptcha, reCAPTCHA, Turnstile, FunCaptcha). Without it, CAPTCHA-blocked applications just fail gracefully |
 
-> **Note:** python-jobspy is installed separately with `--no-deps` because it pins an exact numpy version in its metadata that conflicts with pip's resolver. It works fine with modern numpy at runtime.
-
----
-
 ## Configuration
 
 All generated by `applypilot init`:
 
 ### `profile.json`
-Your personal data in one structured file: contact info, work authorization, compensation, experience, skills, resume facts (preserved during tailoring), and EEO defaults. Powers scoring, tailoring, and form auto-fill.
+Your personal data in one structured file: contact info, work authorization, compensation, experience, skills, resume facts (preserved during tailoring), and EEO defaults.
+
+This powers:
+
+- scoring
+- tailoring
+- cover letters
+- form auto-fill during auto-apply
+
+It does **not** directly control which jobs are crawled.
 
 ### `searches.yaml`
-Job search queries, target titles, locations, boards. Run multiple searches with different parameters.
+Job search queries, target titles, locations, and crawl settings.
+
+This is the file that drives discovery. If you want to change what gets searched, which roles get queried, or which locations are targeted, edit `searches.yaml`.
 
 ### `.env`
 API keys and runtime config: `GEMINI_API_KEY`, `LLM_MODEL`, `CAPSOLVER_API_KEY` (optional).
 
 ### Package configs (shipped with ApplyPilot)
-- `config/employers.yaml` - Workday employer registry (48 preconfigured)
-- `config/sites.yaml` - Direct career sites (30+), blocked sites, base URLs, manual ATS domains
+- `config/employers.yaml` - Workday employer registry (51 preconfigured)
+- `config/greenhouse.yaml` - Greenhouse company board registry (47 preconfigured)
+- `config/lever.yaml` - Lever company board registry (16 preconfigured)
+- `config/sites.yaml` - Blocked sites, base URLs, manual ATS domains (board scraping disabled)
 - `config/searches.example.yaml` - Example search configuration
+
+---
+
+## How Targeting Works
+
+Discovery is targeted by `searches.yaml`, not by your resume or profile.
+
+High-level behavior:
+
+- `Workday` searches each configured query across the built-in employer registry
+- `Greenhouse` fetches curated company boards once and filters jobs locally against your query list
+- `Lever` fetches curated company boards once and filters jobs locally against your query list
+- discovered jobs are deduplicated and then filtered by location rules before later stages
+
+In practice:
+
+- edit `searches.yaml` if you want to change crawl targets
+- edit `profile.json` if you want to change scoring/tailoring/application behavior
+
+The most important targeting fields are:
+
+- `queries`
+- `locations`
+- `defaults.hours_old`
+
+If discovery feels too broad, narrow the query list first. If it feels too narrow, add more query variants before touching the later AI stages.
 
 ---
 
 ## How Stages Work
 
 ### Discover
-Queries Indeed, LinkedIn, Glassdoor, ZipRecruiter, Google Jobs via JobSpy. Scrapes 48 Workday employer portals (configurable in `employers.yaml`). Hits 30 direct career sites with custom extractors. Deduplicates by URL.
+Scrapes 51 verified Workday employer portals (configurable in `employers.yaml`). Fetches 47 curated Greenhouse company boards via the public Job Board API. Fetches 16 curated Lever company boards via the public Lever Postings API. Deduplicates by URL.
 
 ### Enrich
 Visits each job URL and extracts the full description. 3-tier cascade: JSON-LD structured data, then CSS selector patterns, then AI-powered extraction for unknown layouts.
@@ -155,6 +225,87 @@ applypilot apply --mark-failed URL     # manually mark a job as failed
 applypilot apply --reset-failed        # reset all failed jobs for retry
 applypilot apply --gen --url URL       # generate prompt file for manual debugging
 ```
+
+---
+
+## Human-In-The-Loop
+
+ApplyPilot supports both autonomous and review-first workflows.
+
+- `applypilot run` is always safe from accidental submission because it never submits
+- `applypilot apply --dry-run` fills forms and checks the page, but does not click the final submit button
+- `applypilot apply` is autonomous and will submit if the form looks valid
+
+Important limitation:
+
+- there is currently no built-in "pause and ask me before final submit" checkpoint in normal `apply` mode
+
+If you want practical human oversight, the best current workflow is:
+
+1. run `applypilot run`
+2. review output in `applypilot dashboard`
+3. use `applypilot apply --dry-run --url "JOB_URL"`
+4. run `applypilot apply --url "JOB_URL"` once you trust the result
+
+---
+
+## Troubleshooting
+
+### `applypilot run` did not submit any applications
+
+That is expected. `run` prepares jobs and documents only. Submission happens in `apply`.
+
+### Every job scored as `0`
+
+In the current implementation, `0` is the failure sentinel for scoring, not a real "bad fit" score. It usually means:
+
+- the LLM request failed
+- the model returned an incompatible format
+- the model/provider is not compatible with the current request shape
+
+Check a few rows directly:
+
+```bash
+sqlite3 ~/.applypilot/applypilot.db \
+"select title, fit_score, substr(score_reasoning,1,300) from jobs where fit_score=0 limit 10;"
+```
+
+If you see `LLM error: ...`, fix the provider/model issue first, then clear the bad scores and rescore:
+
+```bash
+sqlite3 ~/.applypilot/applypilot.db \
+"update jobs
+ set fit_score = NULL,
+     score_reasoning = NULL,
+     scored_at = NULL
+ where fit_score = 0;"
+
+applypilot run score
+```
+
+### OpenAI `429 Too Many Requests`
+
+That usually means one of:
+
+- requests-per-minute limit
+- tokens-per-minute limit
+- daily token limit
+- quota/billing issue on the API project being used
+
+Check:
+
+- your provider/model in `.env`
+- your OpenAI usage and limits page
+- whether the key belongs to the paid org/project you expect
+
+### Which OpenAI model should I start with?
+
+For scoring, the safest OpenAI defaults are usually:
+
+- `gpt-4.1-mini`
+- `gpt-4o-mini`
+
+Use stronger or more expensive models later for tailoring if needed. If you switch models and want to rescore, clear the old `fit_score` values first as shown above.
 
 ---
 

@@ -370,13 +370,7 @@ def doctor() -> None:
     else:
         results.append(("searches.yaml", warn_mark, "Will use example config — run 'applypilot init'"))
 
-    # jobspy (discovery dep installed separately)
-    try:
-        import jobspy  # noqa: F401
-        results.append(("python-jobspy", ok_mark, "Job board scraping available"))
-    except ImportError:
-        results.append(("python-jobspy", warn_mark,
-                        "pip install --no-deps python-jobspy && pip install pydantic tls-client requests markdownify regex"))
+    results.append(("Discovery sources", ok_mark, "Official ATS only: Workday, Greenhouse, Lever"))
 
     # --- Tier 2 checks ---
     import os

@@ -1,0 +1,69 @@
+# Curated Lever job board registry for ApplyPilot.
+# Site tokens sourced from public Lever-hosted careers pages and public
+# postings API endpoints. Keep this list focused on tech firms with stable
+# Lever boards.
+
+boards:
+  atlassian:
+    name: "Atlassian"
+    site: "atlassian"
+
+  best_egg:
+    name: "Best Egg"
+    site: "BestEgg"
+
+  cloudforce:
+    name: "Cloudforce"
+    site: "go-cloudforce"
+
+  hermeus:
+    name: "Hermeus"
+    site: "hermeus"
+
+  netflix:
+    name: "Netflix"
+    site: "netflix"
+
+  palantir:
+    name: "Palantir"
+    site: "palantir"
+
+  plaid:
+    name: "Plaid"
+    site: "plaid"
+
+  pivotal:
+    name: "Pivotal"
+    site: "pivotal"
+
+  revefi:
+    name: "Revefi"
+    site: "revefi"
+
+  saronic:
+    name: "Saronic"
+    site: "saronic"
+
+  shield_ai:
+    name: "Shield AI"
+    site: "shieldai"
+
+  shopreli:
+    name: "Reli."
+    site: "shopreli"
+
+  spotify:
+    name: "Spotify"
+    site: "spotify"
+
+  sprucesystems:
+    name: "Spruce"
+    site: "sprucesystems"
+
+  velo3d:
+    name: "Velo3D"
+    site: "velo3d"
+
+  woven_by_toyota:
+    name: "Woven by Toyota"
+    site: "woven-by-toyota"

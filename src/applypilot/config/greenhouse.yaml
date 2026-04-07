@@ -1,0 +1,191 @@
+# Curated Greenhouse job board registry for ApplyPilot.
+# Board tokens sourced from public Greenhouse boards.
+
+boards:
+  abnormal_security:
+    name: "Abnormal Security"
+    board_token: "abnormalsecurity"
+
+  affirm:
+    name: "Affirm"
+    board_token: "affirm"
+
+  amplitude:
+    name: "Amplitude"
+    board_token: "amplitude"
+
+  anduril:
+    name: "Anduril Industries"
+    board_token: "andurilindustries"
+
+  aquatic_capital:
+    name: "Aquatic Capital"
+    board_token: "aquaticcapitalmanagement"
+
+  akuna_capital:
+    name: "Akuna Capital"
+    board_token: "akunacapital"
+
+  clickhouse:
+    name: "ClickHouse"
+    board_token: "clickhouse"
+
+  cloudflare:
+    name: "Cloudflare"
+    board_token: "cloudflare"
+
+  coinbase:
+    name: "Coinbase"
+    board_token: "coinbase"
+
+  cerebras:
+    name: "Cerebras Systems"
+    board_token: "cerebrassystems"
+
+  databricks:
+    name: "Databricks"
+    board_token: "databricks"
+
+  datadog:
+    name: "Datadog"
+    board_token: "datadog"
+
+  discord:
+    name: "Discord"
+    board_token: "discord"
+
+  drw:
+    name: "DRW"
+    board_token: "drweng"
+
+  dropbox:
+    name: "Dropbox"
+    board_token: "dropbox"
+
+  duolingo:
+    name: "Duolingo"
+    board_token: "duolingo"
+
+  figma:
+    name: "Figma"
+    board_token: "figma"
+
+  flexport:
+    name: "Flexport"
+    board_token: "flexport"
+
+  five_rings:
+    name: "Five Rings"
+    board_token: "fiveringsllc"
+
+  gitlab:
+    name: "GitLab"
+    board_token: "gitlab"
+
+  instacart:
+    name: "Instacart"
+    board_token: "instacart"
+
+  imc:
+    name: "IMC Trading"
+    board_token: "imc"
+
+  ionq:
+    name: "IonQ"
+    board_token: "ionq"
+
+  hudson_river_trading:
+    name: "Hudson River Trading"
+    board_token: "wehrtyou"
+
+  jump_trading:
+    name: "Jump Trading"
+    board_token: "jumptrading"
+
+  mongodb:
+    name: "MongoDB"
+    board_token: "mongodb"
+
+  okta:
+    name: "Okta"
+    board_token: "okta"
+
+  pagerduty:
+    name: "PagerDuty"
+    board_token: "pagerduty"
+
+  pinterest:
+    name: "Pinterest"
+    board_token: "pinterest"
+
+  psiquantum:
+    name: "PsiQuantum"
+    board_token: "psiquantum"
+
+  postman:
+    name: "Postman"
+    board_token: "postman"
+
+  optiver:
+    name: "Optiver"
+    board_token: "optiverprivate"
+
+  qube:
+    name: "Qube Research & Technologies"
+    board_token: "quberesearchandtechnologies"
+
+  quera:
+    name: "QuEra Computing"
+    board_token: "queracomputinginc"
+
+  reddit:
+    name: "Reddit"
+    board_token: "reddit"
+
+  robinhood:
+    name: "Robinhood"
+    board_token: "robinhood"
+
+  roblox:
+    name: "Roblox"
+    board_token: "roblox"
+
+  scale_ai:
+    name: "Scale AI"
+    board_token: "scaleai"
+
+  spacex:
+    name: "SpaceX"
+    board_token: "spacex"
+
+  stripe:
+    name: "Stripe"
+    board_token: "stripe"
+
+  twilio:
+    name: "Twilio"
+    board_token: "twilio"
+
+  virtu:
+    name: "Virtu Financial"
+    board_token: "virtu"
+
+  vercel:
+    name: "Vercel"
+    board_token: "vercel"
+
+  walleye:
+    name: "Walleye Capital"
+    board_token: "walleyecapital-external-fulltime"
+
+  waymo:
+    name: "Waymo"
+    board_token: "waymo"
+
+  webflow:
+    name: "Webflow"
+    board_token: "webflow"
+
+  wiz:
+    name: "Wiz"
+    board_token: "wizinc"

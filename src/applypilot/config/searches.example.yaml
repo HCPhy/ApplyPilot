@@ -82,20 +82,8 @@ location:
     - "India"
     - "Philippines"
 
-# Country for Indeed/LinkedIn/Google Jobs searches
-country: "USA"
-
-# JobSpy source boards (all available options shown)
-boards:
-  - indeed
-  - linkedin
-  - glassdoor
-  - zip_recruiter
-  - google
-
 # Search defaults
 defaults:
-  results_per_site: 100  # Max results per board per query
   hours_old: 72          # Only jobs posted within this many hours
 
 # Negative keywords -- skip jobs with these in the title (case-insensitive)

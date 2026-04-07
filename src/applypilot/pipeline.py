@@ -35,7 +35,7 @@ console = Console()
 STAGE_ORDER = ("discover", "enrich", "score", "tailor", "cover", "pdf")
 
 STAGE_META: dict[str, dict] = {
-    "discover": {"desc": "Job discovery (JobSpy + Workday + smart extract)"},
+    "discover": {"desc": "Job discovery (official employer ATS only: Workday + Greenhouse + Lever)"},
     "enrich":   {"desc": "Detail enrichment (full descriptions + apply URLs)"},
     "score":    {"desc": "LLM scoring (fit 1-10)"},
     "tailor":   {"desc": "Resume tailoring (LLM + validation)"},
@@ -60,19 +60,8 @@ _UPSTREAM: dict[str, str | None] = {
 # ---------------------------------------------------------------------------
 
 def _run_discover(workers: int = 1) -> dict:
-    """Stage: Job discovery — JobSpy, Workday, and smart-extract scrapers."""
-    stats: dict = {"jobspy": None, "workday": None, "smartextract": None}
-
-    # JobSpy
-    console.print("  [cyan]JobSpy full crawl...[/cyan]")
-    try:
-        from applypilot.discovery.jobspy import run_discovery
-        run_discovery()
-        stats["jobspy"] = "ok"
-    except Exception as e:
-        log.error("JobSpy crawl failed: %s", e)
-        console.print(f"  [red]JobSpy error:[/red] {e}")
-        stats["jobspy"] = f"error: {e}"
+    """Stage: Job discovery — official employer ATS scrapers only."""
+    stats: dict = {"workday": None, "greenhouse": None, "lever": None}
 
     # Workday corporate scraper
     console.print("  [cyan]Workday corporate scraper...[/cyan]")
@@ -85,16 +74,27 @@ def _run_discover(workers: int = 1) -> dict:
         console.print(f"  [red]Workday error:[/red] {e}")
         stats["workday"] = f"error: {e}"
 
-    # Smart extract
-    console.print("  [cyan]Smart extract (AI-powered scraping)...[/cyan]")
+    # Greenhouse company board scraper
+    console.print("  [cyan]Greenhouse company scraper...[/cyan]")
     try:
-        from applypilot.discovery.smartextract import run_smart_extract
-        run_smart_extract(workers=workers)
-        stats["smartextract"] = "ok"
+        from applypilot.discovery.greenhouse import run_greenhouse_discovery
+        run_greenhouse_discovery(workers=workers)
+        stats["greenhouse"] = "ok"
     except Exception as e:
-        log.error("Smart extract failed: %s", e)
-        console.print(f"  [red]Smart extract error:[/red] {e}")
-        stats["smartextract"] = f"error: {e}"
+        log.error("Greenhouse scraper failed: %s", e)
+        console.print(f"  [red]Greenhouse error:[/red] {e}")
+        stats["greenhouse"] = f"error: {e}"
+
+    # Lever company board scraper
+    console.print("  [cyan]Lever company scraper...[/cyan]")
+    try:
+        from applypilot.discovery.lever import run_lever_discovery
+        run_lever_discovery(workers=workers)
+        stats["lever"] = "ok"
+    except Exception as e:
+        log.error("Lever scraper failed: %s", e)
+        console.print(f"  [red]Lever error:[/red] {e}")
+        stats["lever"] = f"error: {e}"
 
     return stats
 

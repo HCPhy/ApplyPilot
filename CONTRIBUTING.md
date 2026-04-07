@@ -48,26 +48,15 @@ Workday employer portals are configured in `config/employers.yaml`. To add a new
 4. Test discovery: `applypilot discover --employer "Company Name"`
 5. Submit a PR with the new entry
 
-### Adding New Career Sites
+### Adding New Official Employer Sources
 
-Direct career site scrapers are configured in `config/sites.yaml`. To add a new site:
+This repo now targets official employer-owned ATS portals only. Prefer adding firms to:
 
-1. Inspect the company's careers page and identify the job listing structure
-2. Add an entry to `config/sites.yaml` with CSS selectors:
+1. `config/employers.yaml` for Workday
+2. `config/greenhouse.yaml` for Greenhouse
+3. `config/lever.yaml` for Lever
 
-```yaml
-- name: "Company Name"
-  url: "https://company.com/careers"
-  selectors:
-    job_list: ".job-listing"
-    title: ".job-title"
-    location: ".job-location"
-    link: "a.job-link"
-    description: ".job-description"
-```
-
-3. Test: `applypilot discover --site "Company Name"`
-4. Submit a PR
+Please do not add third-party job boards or aggregators such as LinkedIn, Indeed, ZipRecruiter, Dice, Otta, or similar sites.
 
 ### Bug Fixes and Features
 

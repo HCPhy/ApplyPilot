@@ -22,6 +22,7 @@ import yaml
 from applypilot import config
 from applypilot.config import CONFIG_DIR
 from applypilot.database import get_connection, init_db
+from applypilot.discovery.location_filters import location_ok, normalize_location_preferences
 
 log = logging.getLogger(__name__)
 
@@ -45,30 +46,12 @@ def _load_location_filter(search_cfg: dict | None = None):
     if search_cfg is None:
         search_cfg = config.load_search_config()
 
-    accept = search_cfg.get("location_accept", [])
-    reject = search_cfg.get("location_reject_non_remote", [])
-    return accept, reject
+    return normalize_location_preferences(search_cfg)
 
 
 def _location_ok(location: str | None, accept: list[str], reject: list[str]) -> bool:
     """Check if a job location passes the user's location filter."""
-    if not location:
-        return True
-
-    loc = location.lower()
-
-    if any(r in loc for r in ("remote", "anywhere", "work from home", "wfh", "distributed")):
-        return True
-
-    for r in reject:
-        if r.lower() in loc:
-            return False
-
-    for a in accept:
-        if a.lower() in loc:
-            return True
-
-    return False
+    return location_ok(location, accept, reject)
 
 
 # -- HTML stripper -----------------------------------------------------------
@@ -495,7 +478,7 @@ def run_workday_discovery(employers: dict | None = None, workers: int = 1) -> di
     accept_locs, reject_locs = _load_location_filter(search_cfg)
 
     # Default to tier 1-2 queries for workday scraping
-    max_tier = search_cfg.get("workday_max_tier", 2)
+    max_tier = search_cfg.get("workday_max_tier", 3)
     queries = [q["query"] for q in queries_cfg if q.get("tier", 99) <= max_tier]
 
     if not queries:

@@ -34,6 +34,7 @@ class WorkerState:
     jobs_applied: int = 0
     jobs_failed: int = 0
     jobs_done: int = 0
+    last_job_cost: float = 0.0
     total_cost: float = 0.0
     log_file: Path | None = None
 
@@ -121,7 +122,8 @@ def render_dashboard() -> Table:
     table.add_column("Last Action", min_width=20, max_width=35, no_wrap=True)
     table.add_column("OK", width=4, justify="right", style="green")
     table.add_column("Fail", width=4, justify="right", style="red")
-    table.add_column("Cost", width=8, justify="right")
+    table.add_column("Job $", width=8, justify="right")
+    table.add_column("Total $", width=8, justify="right")
 
     with _lock:
         states = sorted(_worker_states.values(), key=lambda s: s.worker_id)
@@ -149,6 +151,7 @@ def render_dashboard() -> Table:
             s.last_action[:35] if s.last_action else "",
             str(s.jobs_applied),
             str(s.jobs_failed),
+            f"${s.last_job_cost:.3f}" if s.last_job_cost else "",
             f"${s.total_cost:.3f}" if s.total_cost else "",
         )
         total_applied += s.jobs_applied
@@ -159,7 +162,7 @@ def render_dashboard() -> Table:
     table.add_section()
     table.add_row(
         "", "", "", "", "", "TOTAL",
-        str(total_applied), str(total_failed), f"${total_cost:.3f}",
+        str(total_applied), str(total_failed), "", f"${total_cost:.3f}",
         style="bold",
     )
 

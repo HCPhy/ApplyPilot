@@ -90,6 +90,20 @@ employers:
     site_id: "jobs"
     base_url: "https://paypal.wd1.myworkdayjobs.com"
 
+  # ── US Banks & Finance ─────────────────────────────────────────────────
+
+  citi:
+    name: "Citi"
+    tenant: "citi"
+    site_id: "2"
+    base_url: "https://citi.wd5.myworkdayjobs.com"
+
+  blackstone:
+    name: "Blackstone"
+    tenant: "blackstone"
+    site_id: "blackstone_careers"
+    base_url: "https://blackstone.wd1.myworkdayjobs.com"
+
   # ── Canadian Pension Funds ──────────────────────────────────────────────
 
   cppib:
@@ -148,6 +162,12 @@ employers:
     site_id: "Careers"
     base_url: "https://ciena.wd5.myworkdayjobs.com"
 
+  cadence:
+    name: "Cadence"
+    tenant: "cadence"
+    site_id: "External_Careers"
+    base_url: "https://cadence.wd1.myworkdayjobs.com"
+
   workday:
     name: "Workday"
     tenant: "workday"
@@ -190,6 +210,18 @@ employers:
     site_id: "external_experienced"
     base_url: "https://adobe.wd5.myworkdayjobs.com"
 
+  dell:
+    name: "Dell"
+    tenant: "dell"
+    site_id: "External"
+    base_url: "https://dell.wd1.myworkdayjobs.com"
+
+  hp:
+    name: "HP"
+    tenant: "hp"
+    site_id: "ExternalCareerSite"
+    base_url: "https://hp.wd5.myworkdayjobs.com"
+
   motorola:
     name: "Motorola Solutions"
     tenant: "motorolasolutions"
@@ -208,23 +240,11 @@ employers:
     site_id: "M_tx"
     base_url: "https://modernatx.wd1.myworkdayjobs.com"
 
-  servicenow:
-    name: "ServiceNow"
-    tenant: "servicenow"
-    site_id: "ServiceNowCareers"
-    base_url: "https://servicenow.wd1.myworkdayjobs.com"
-
-  docusign:
-    name: "DocuSign"
-    tenant: "docusign"
-    site_id: "External"
-    base_url: "https://docusign.wd5.myworkdayjobs.com"
-
-  uber:
-    name: "Uber"
-    tenant: "uber"
-    site_id: "uberCareers"
-    base_url: "https://uber.wd5.myworkdayjobs.com"
+  autodesk:
+    name: "Autodesk"
+    tenant: "autodesk"
+    site_id: "Ext"
+    base_url: "https://autodesk.wd1.myworkdayjobs.com"
 
   # ── Consulting ──────────────────────────────────────────────────────────
 
