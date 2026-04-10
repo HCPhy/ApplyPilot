@@ -12,8 +12,73 @@ from datetime import datetime
 from pathlib import Path
 
 from applypilot import config
+from applypilot.discovery.location_filters import US_WIDE_SENTINEL, normalize_location_preferences
 
 logger = logging.getLogger(__name__)
+
+
+def _get_relocation_scope(profile: dict) -> str:
+    """Return the normalized relocation scope for the applicant."""
+    avail = profile.get("availability", {})
+
+    explicit_flag = avail.get("willing_to_relocate_anywhere_in_us")
+    if isinstance(explicit_flag, bool):
+        return "us" if explicit_flag else "local_only"
+
+    raw = str(
+        avail.get("relocation_scope")
+        or avail.get("relocation_preference")
+        or ""
+    ).strip().lower()
+
+    us_values = {
+        "us",
+        "united_states",
+        "united states",
+        "anywhere_us",
+        "anywhere in the us",
+        "anywhere in the u.s.",
+        "us_anywhere",
+    }
+    if raw in us_values:
+        return "us"
+
+    return "local_only"
+
+
+def _get_local_onsite_targets(profile: dict, search_config: dict) -> list[str]:
+    """Return the allowed local onsite/hybrid areas for local-only relocation."""
+    accept_patterns, _ = normalize_location_preferences(search_config)
+    targets = [
+        pattern
+        for pattern in accept_patterns
+        if pattern not in {US_WIDE_SENTINEL, "Remote"}
+    ]
+    if targets:
+        return targets
+
+    personal = profile["personal"]
+    primary_city = personal.get(
+        "city",
+        search_config.get("location", {}).get("primary", "your city"),
+    )
+    return [primary_city]
+
+
+def _build_relocation_summary(profile: dict, search_config: dict) -> str:
+    """Build a short relocation summary for profile + screening prompts."""
+    personal = profile["personal"]
+    city = personal.get("city", "their current city")
+    relocation_scope = _get_relocation_scope(profile)
+
+    if relocation_scope == "us":
+        return (
+            f"Currently based in {city}; willing to relocate anywhere in the United States "
+            "for the right onsite or hybrid role."
+        )
+
+    city_list = ", ".join(_get_local_onsite_targets(profile, search_config))
+    return f"Currently based in {city}; not willing to relocate outside {city_list}."
 
 
 def _build_profile_summary(profile: dict) -> str:
@@ -73,6 +138,7 @@ def _build_profile_summary(profile: dict) -> str:
 
     # Availability
     lines.append(f"Available: {avail.get('earliest_start_date', 'Immediately')}")
+    lines.append(f"Relocation: {_build_relocation_summary(profile, config.load_search_config())}")
 
     # Standard responses
     lines.extend([
@@ -98,17 +164,20 @@ def _build_location_check(profile: dict, search_config: dict) -> str:
     Uses the accept_patterns from search config to determine which cities
     are acceptable for hybrid/onsite roles.
     """
-    personal = profile["personal"]
-    location_cfg = search_config.get("location", {})
-    accept_patterns = location_cfg.get("accept_patterns", [])
-    primary_city = personal.get("city", location_cfg.get("primary", "your city"))
+    relocation_scope = _get_relocation_scope(profile)
 
-    # Build the list of acceptable cities for hybrid/onsite
-    if accept_patterns:
-        city_list = ", ".join(accept_patterns)
-    else:
-        city_list = primary_city
+    if relocation_scope == "us":
+        return """== LOCATION CHECK (do this FIRST before any form) ==
+Read the job page. Determine the work arrangement. Then decide:
+- "Remote" or "work from anywhere" AND the role is open to workers in the United States -> ELIGIBLE. Apply.
+- "Hybrid" or "onsite" anywhere in the United States -> ELIGIBLE. Apply. The candidate is willing to relocate anywhere in the U.S.
+- "Remote" but explicitly outside the United States only -> NOT ELIGIBLE. Stop immediately. Output RESULT:FAILED:not_eligible_location
+- "Hybrid" or "onsite" outside the United States -> NOT ELIGIBLE. Stop immediately. Output RESULT:FAILED:not_eligible_location
+- City is overseas (India, Philippines, Europe, etc.) with no U.S. option -> NOT ELIGIBLE. Output RESULT:FAILED:not_eligible_location
+- Cannot determine location -> Continue applying. If a screening question reveals it's not U.S.-based, answer honestly and let the system reject if needed.
+Do NOT fill out forms for jobs that are clearly outside the United States. Check EARLY, save time."""
 
+    city_list = ", ".join(_get_local_onsite_targets(profile, search_config))
     return f"""== LOCATION CHECK (do this FIRST before any form) ==
 Read the job page. Determine the work arrangement. Then decide:
 - "Remote" or "work from anywhere" -> ELIGIBLE. Apply.
@@ -166,14 +235,16 @@ def _build_screening_section(profile: dict) -> str:
     """Build the screening questions guidance section."""
     personal = profile["personal"]
     exp = profile.get("experience", {})
+    search_config = config.load_search_config()
     city = personal.get("city", "their city")
     years = exp.get("years_of_experience_total", "multiple")
     target_role = exp.get("target_role", personal.get("current_job_title", "software engineer"))
     work_auth = profile["work_authorization"]
+    relocation_summary = _build_relocation_summary(profile, search_config)
 
     return f"""== SCREENING QUESTIONS (be strategic) ==
 Hard facts -> answer truthfully from the profile. No guessing. This includes:
-  - Location/relocation: lives in {city}, cannot relocate
+  - Location/relocation: {relocation_summary}
   - Work authorization: {work_auth.get('legally_authorized_to_work', 'see profile')}
   - Citizenship, clearance, licenses, certifications: answer from profile only
   - Criminal/background: answer from profile only
@@ -417,9 +488,11 @@ If CapSolver genuinely failed (errorId > 0):
 4. All else fails -> Output RESULT:CAPTCHA."""
 
 
-def build_prompt(job: dict, tailored_resume: str,
+def build_prompt(job: dict, resume_text: str,
+                 resume_pdf_path: str | Path | None = None,
                  cover_letter: str | None = None,
-                 dry_run: bool = False) -> str:
+                 dry_run: bool = False,
+                 resume_kind: str = "tailored") -> str:
     """Build the full instruction prompt for the apply agent.
 
     Loads the user profile and search config internally. All personal data
@@ -428,9 +501,11 @@ def build_prompt(job: dict, tailored_resume: str,
     Args:
         job: Job dict from the database (must have url, title, site,
              application_url, fit_score, tailored_resume_path).
-        tailored_resume: Plain-text content of the tailored resume.
+        resume_text: Plain-text content of the resume used for the application.
+        resume_pdf_path: PDF path to upload. Falls back to tailored resume path if omitted.
         cover_letter: Optional plain-text cover letter content.
         dry_run: If True, tell the agent not to click Submit.
+        resume_kind: Either "tailored" or "base" for prompt wording.
 
     Returns:
         Complete prompt string for the AI agent.
@@ -440,11 +515,14 @@ def build_prompt(job: dict, tailored_resume: str,
     personal = profile["personal"]
 
     # --- Resolve resume PDF path ---
-    resume_path = job.get("tailored_resume_path")
-    if not resume_path:
-        raise ValueError(f"No tailored resume for job: {job.get('title', 'unknown')}")
+    resolved_resume_pdf = Path(resume_pdf_path).resolve() if resume_pdf_path else None
+    if resolved_resume_pdf is None:
+        resume_path = job.get("tailored_resume_path")
+        if not resume_path:
+            raise ValueError(f"No resume available for job: {job.get('title', 'unknown')}")
+        resolved_resume_pdf = Path(resume_path).with_suffix(".pdf").resolve()
 
-    src_pdf = Path(resume_path).with_suffix(".pdf").resolve()
+    src_pdf = resolved_resume_pdf
     if not src_pdf.exists():
         raise ValueError(f"Resume PDF not found: {src_pdf}")
 
@@ -508,10 +586,12 @@ def build_prompt(job: dict, tailored_resume: str,
     display_name = f"{preferred_name} {last_name}".strip()
 
     # Dry-run: override submit instruction
+    resume_label = "TAILORED RESUME" if resume_kind == "tailored" else "BASE RESUME"
+
     if dry_run:
         submit_instruction = "IMPORTANT: Do NOT click the final Submit/Apply button. Review the form, verify all fields, then output RESULT:APPLIED with a note that this was a dry run."
     else:
-        submit_instruction = "BEFORE clicking Submit/Apply, take a snapshot and review EVERY field on the page. Verify all data matches the APPLICANT PROFILE and TAILORED RESUME -- name, email, phone, location, work auth, resume uploaded, cover letter if applicable. If anything is wrong or missing, fix it FIRST. Only click Submit after confirming everything is correct."
+        submit_instruction = f"BEFORE clicking Submit/Apply, take a snapshot and review EVERY field on the page. Verify all data matches the APPLICANT PROFILE and {resume_label} -- name, email, phone, location, work auth, resume uploaded, cover letter if applicable. If anything is wrong or missing, fix it FIRST. Only click Submit after confirming everything is correct."
 
     prompt = f"""You are an autonomous job application agent. Your ONE mission: get this candidate an interview. You have all the information and tools. Think strategically. Act decisively. Submit the application.
 
@@ -524,9 +604,10 @@ Fit Score: {job.get('fit_score', 'N/A')}/10
 == FILES ==
 Resume PDF (upload this): {pdf_path}
 Cover Letter PDF (upload if asked): {cl_upload_path or "N/A"}
+Resume Source: {resume_kind}
 
 == RESUME TEXT (use when filling text fields) ==
-{tailored_resume}
+{resume_text}
 
 == COVER LETTER TEXT (paste if text field, upload PDF if file field) ==
 {cl_display}
@@ -538,6 +619,8 @@ Cover Letter PDF (upload if asked): {cl_upload_path or "N/A"}
 Submit a complete, accurate application. Use the profile and resume as source data -- adapt to fit each form's format.
 
 If something unexpected happens and these instructions don't cover it, figure it out yourself. You are autonomous. Navigate pages, read content, try buttons, explore the site. The goal is always the same: submit the application. Do whatever it takes to reach that goal.
+
+Cost discipline matters. Use the FEWEST tool calls and the SHORTEST possible text. Do not write progress summaries, success recaps, or repeated explanations while working.
 
 {hard_rules}
 
@@ -574,10 +657,10 @@ If something unexpected happens and these instructions don't cover it, figure it
    5f. Need email verification? Use search_emails + read_email to get the code.
    5g. After login, run browser_tabs action "list" again. Switch back to the application tab if needed.
    5h. All failed? Output RESULT:FAILED:login_issue. Do not loop.
-6. Upload resume. ALWAYS upload fresh -- delete any existing resume first, then browser_file_upload with the PDF path above. This is the tailored resume for THIS job. Non-negotiable.
+6. Upload resume. ALWAYS upload fresh -- delete any existing resume first, then browser_file_upload with the PDF path above. Use the exact resume file provided above.
 7. Upload cover letter if there's a field for it. Text field -> paste the cover letter text. File upload -> use the cover letter PDF path.
 8. Check ALL pre-filled fields. ATS systems parse your resume and auto-fill -- it's often WRONG.
-   - "Current Job Title" or "Most Recent Title" -> use the title from the TAILORED RESUME summary, NOT whatever the parser guessed.
+   - "Current Job Title" or "Most Recent Title" -> use the title from the RESUME TEXT above, NOT whatever the parser guessed.
    - Compare every other field to the APPLICANT PROFILE. Fix mismatches. Fill empty fields.
 9. Answer screening questions using the rules above.
 10. {submit_instruction}
@@ -585,6 +668,7 @@ If something unexpected happens and these instructions don't cover it, figure it
 12. Output your result.
 
 == RESULT CODES (output EXACTLY one) ==
+Your FINAL message must be EXACTLY one plain-text RESULT line. No markdown, no bullets, no explanation before or after it.
 RESULT:APPLIED -- submitted successfully
 RESULT:EXPIRED -- job closed or no longer accepting applications
 RESULT:CAPTCHA -- blocked by unsolvable captcha
@@ -598,7 +682,8 @@ RESULT:FAILED:reason -- any other failure (brief reason)
 - Only snapshot again when you need element refs to click/fill.
 - Multi-page forms (Workday, Taleo, iCIMS): snapshot each new page, fill all fields, click Next/Continue. Repeat until final review page.
 - Fill ALL fields in ONE browser_fill_form call. Not one at a time.
-- Keep your thinking SHORT. Don't repeat page structure back.
+- Snapshot budget: target <= 12 snapshots per application unless CAPTCHA or a validation-error page forces more.
+- Keep your thinking SHORT. No play-by-play narration. No recap of completed steps. After a successful action, continue immediately to the next action.
 - CAPTCHA AWARENESS: After any navigation, Apply/Submit/Login click, or when a page feels stuck -- run CAPTCHA DETECT (see CAPTCHA section). Invisible CAPTCHAs (Turnstile, reCAPTCHA v3) show NO visual widget but block form submissions silently. The detect script finds them even when invisible.
 
 == FORM TRICKS ==

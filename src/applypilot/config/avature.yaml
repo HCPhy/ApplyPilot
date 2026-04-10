@@ -1,0 +1,11 @@
+# Curated Avature job portal registry for ApplyPilot.
+# These boards use public Avature-hosted search/result pages rather than a
+# simple public JSON API, so discovery crawls the rendered search pages and
+# then fetches matching detail pages.
+
+boards:
+  siemens:
+    name: "Siemens"
+    search_url: "https://jobs.siemens.com/en_US/externaljobs/SearchJobs"
+    records_per_page: 100
+    max_pages: 250

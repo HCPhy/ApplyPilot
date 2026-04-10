@@ -15,17 +15,18 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from rich.console import Console
 from rich.panel import Panel
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskProgressColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 from applypilot.config import load_env, ensure_dirs
 from applypilot.database import init_db, get_connection, get_stats
+from applypilot.ui import console
 
 log = logging.getLogger(__name__)
-console = Console()
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +36,7 @@ console = Console()
 STAGE_ORDER = ("discover", "enrich", "score", "tailor", "cover", "pdf")
 
 STAGE_META: dict[str, dict] = {
-    "discover": {"desc": "Job discovery (official employer ATS only: Workday + Greenhouse + Lever)"},
+    "discover": {"desc": "Job discovery (official employer ATS only: Workday + Greenhouse + Lever + Avature)"},
     "enrich":   {"desc": "Detail enrichment (full descriptions + apply URLs)"},
     "score":    {"desc": "LLM scoring (fit 1-10)"},
     "tailor":   {"desc": "Resume tailoring (LLM + validation)"},
@@ -61,40 +62,109 @@ _UPSTREAM: dict[str, str | None] = {
 
 def _run_discover(workers: int = 1) -> dict:
     """Stage: Job discovery — official employer ATS scrapers only."""
-    stats: dict = {"workday": None, "greenhouse": None, "lever": None}
+    from applypilot.discovery.avature import load_boards as load_avature_boards, run_avature_discovery
+    from applypilot.discovery.greenhouse import load_boards as load_greenhouse_boards, run_greenhouse_discovery
+    from applypilot.discovery.lever import load_boards as load_lever_boards, run_lever_discovery
+    from applypilot.discovery.workday import load_employers, run_workday_discovery
 
-    # Workday corporate scraper
-    console.print("  [cyan]Workday corporate scraper...[/cyan]")
-    try:
-        from applypilot.discovery.workday import run_workday_discovery
-        run_workday_discovery(workers=workers)
-        stats["workday"] = "ok"
-    except Exception as e:
-        log.error("Workday scraper failed: %s", e)
-        console.print(f"  [red]Workday error:[/red] {e}")
-        stats["workday"] = f"error: {e}"
+    stats: dict = {"workday": None, "greenhouse": None, "lever": None, "avature": None}
 
-    # Greenhouse company board scraper
-    console.print("  [cyan]Greenhouse company scraper...[/cyan]")
-    try:
-        from applypilot.discovery.greenhouse import run_greenhouse_discovery
-        run_greenhouse_discovery(workers=workers)
-        stats["greenhouse"] = "ok"
-    except Exception as e:
-        log.error("Greenhouse scraper failed: %s", e)
-        console.print(f"  [red]Greenhouse error:[/red] {e}")
-        stats["greenhouse"] = f"error: {e}"
+    sources = {
+        "workday": {
+            "label": "Workday",
+            "style": "[cyan]Workday[/cyan]",
+            "items": load_employers(),
+        },
+        "greenhouse": {
+            "label": "Greenhouse",
+            "style": "[green]Greenhouse[/green]",
+            "items": load_greenhouse_boards(),
+        },
+        "lever": {
+            "label": "Lever",
+            "style": "[magenta]Lever[/magenta]",
+            "items": load_lever_boards(),
+        },
+        "avature": {
+            "label": "Avature",
+            "style": "[blue]Avature[/blue]",
+            "items": load_avature_boards(),
+        },
+    }
 
-    # Lever company board scraper
-    console.print("  [cyan]Lever company scraper...[/cyan]")
-    try:
-        from applypilot.discovery.lever import run_lever_discovery
-        run_lever_discovery(workers=workers)
-        stats["lever"] = "ok"
-    except Exception as e:
-        log.error("Lever scraper failed: %s", e)
-        console.print(f"  [red]Lever error:[/red] {e}")
-        stats["lever"] = f"error: {e}"
+    progress = Progress(
+        TextColumn("{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        MofNCompleteColumn(),
+        TextColumn("[dim]query:[/dim] {task.fields[query]}"),
+        TextColumn("[dim]target:[/dim] {task.fields[target]}"),
+        TextColumn("[dim]pages:[/dim] {task.fields[pages]}"),
+        TextColumn("[dim]new:[/dim] {task.fields[new]}"),
+        TextColumn("[dim]dupes:[/dim] {task.fields[dupes]}"),
+        TextColumn("[dim]err:[/dim] {task.fields[errors]}"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    )
+
+    with progress:
+        tasks = {
+            key: progress.add_task(
+                f"{cfg['style']} crawl",
+                total=max(1, len(cfg["items"])),
+                query="-",
+                target="-",
+                pages=0,
+                new=0,
+                dupes=0,
+                errors=0,
+            )
+            for key, cfg in sources.items()
+        }
+
+        with ThreadPoolExecutor(max_workers=len(sources)) as pool:
+            futures = {
+                pool.submit(
+                    run_workday_discovery,
+                    employers=sources["workday"]["items"],
+                    workers=workers,
+                    progress=progress,
+                    task_id=tasks["workday"],
+                ): "workday",
+                pool.submit(
+                    run_greenhouse_discovery,
+                    boards=sources["greenhouse"]["items"],
+                    workers=workers,
+                    progress=progress,
+                    task_id=tasks["greenhouse"],
+                ): "greenhouse",
+                pool.submit(
+                    run_lever_discovery,
+                    boards=sources["lever"]["items"],
+                    workers=workers,
+                    progress=progress,
+                    task_id=tasks["lever"],
+                ): "lever",
+                pool.submit(
+                    run_avature_discovery,
+                    boards=sources["avature"]["items"],
+                    workers=workers,
+                    progress=progress,
+                    task_id=tasks["avature"],
+                ): "avature",
+            }
+
+            for future in as_completed(futures):
+                key = futures[future]
+                total = progress.tasks[tasks[key]].total
+                try:
+                    stats[key] = future.result()
+                    progress.update(tasks[key], completed=total, target="done")
+                except Exception as e:
+                    log.error("%s scraper failed: %s", sources[key]["label"], e)
+                    stats[key] = f"error: {e}"
+                    progress.update(tasks[key], completed=total, target="failed", errors=1)
 
     return stats
 

@@ -23,12 +23,14 @@ from datetime import datetime, timedelta, timezone
 from html import unescape
 
 import yaml
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
 from applypilot import config
 from applypilot.config import CONFIG_DIR
 from applypilot.database import get_connection, init_db
 from applypilot.discovery.location_filters import location_ok, normalize_location_preferences
 from applypilot.discovery.workday import strip_html
+from applypilot.ui import console
 
 log = logging.getLogger(__name__)
 
@@ -401,7 +403,12 @@ def _process_one(
     }
 
 
-def run_lever_discovery(boards: dict | None = None, workers: int = 1) -> dict:
+def run_lever_discovery(
+    boards: dict | None = None,
+    workers: int = 1,
+    progress: Progress | None = None,
+    task_id: int | None = None,
+) -> dict:
     """Fetch curated Lever boards and store matching jobs."""
     if boards is None:
         boards = load_boards()
@@ -434,36 +441,65 @@ def run_lever_discovery(boards: dict | None = None, workers: int = 1) -> dict:
         len(board_items), len(queries), workers,
     )
 
-    if workers > 1 and len(board_items) > 1:
-        with ThreadPoolExecutor(max_workers=min(workers, len(board_items))) as pool:
-            futures = {
-                pool.submit(
-                    _process_one,
-                    board_key,
-                    board,
-                    queries,
-                    accept_locs,
-                    reject_locs,
-                    exclude_titles,
-                    hours_old,
-                    request_timeout,
-                ): board_key
-                for board_key, board in board_items
-            }
-            for i, future in enumerate(as_completed(futures), 1):
-                result = future.result()
-                total_new += result["new"]
-                total_existing += result["existing"]
-                total_found += result["found"]
-                if "error" in result:
-                    errors += 1
-                if i % 10 == 0 or i == len(board_items):
-                    elapsed = time.time() - t0
-                    log.info(
-                        "Lever progress: %d/%d boards (%d new, %d dupes, %d errors) [%.0fs]",
-                        i, len(board_items), total_new, total_existing, errors, elapsed,
+    owns_progress = progress is None
+    if owns_progress:
+        progress = Progress(
+            TextColumn("[magenta]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            MofNCompleteColumn(),
+            TextColumn("[dim]board:[/dim] {task.fields[target]}"),
+            TextColumn("[dim]new:[/dim] {task.fields[new]}"),
+            TextColumn("[dim]dupes:[/dim] {task.fields[dupes]}"),
+            TextColumn("[dim]err:[/dim] {task.fields[errors]}"),
+            TimeElapsedColumn(),
+            console=console,
+            transient=False,
+        )
+
+    def _run_boards() -> None:
+        nonlocal total_new, total_existing, total_found, errors, progress, task_id
+        assert progress is not None
+        assert task_id is not None
+        if workers > 1 and len(board_items) > 1:
+            with ThreadPoolExecutor(max_workers=min(workers, len(board_items))) as pool:
+                futures = {
+                    pool.submit(
+                        _process_one,
+                        board_key,
+                        board,
+                        queries,
+                        accept_locs,
+                        reject_locs,
+                        exclude_titles,
+                        hours_old,
+                        request_timeout,
+                    ): board_key
+                    for board_key, board in board_items
+                }
+                for i, future in enumerate(as_completed(futures), 1):
+                    result = future.result()
+                    total_new += result["new"]
+                    total_existing += result["existing"]
+                    total_found += result["found"]
+                    if "error" in result:
+                        errors += 1
+                    progress.update(
+                        task_id,
+                        advance=1,
+                        target=result["board"],
+                        new=total_new,
+                        dupes=total_existing,
+                        errors=errors,
                     )
-    else:
+                    if i % 10 == 0 or i == len(board_items):
+                        elapsed = time.time() - t0
+                        log.info(
+                            "Lever progress: %d/%d boards (%d new, %d dupes, %d errors) [%.0fs]",
+                            i, len(board_items), total_new, total_existing, errors, elapsed,
+                        )
+            return
+
         for i, (board_key, board) in enumerate(board_items, 1):
             result = _process_one(
                 board_key,
@@ -480,6 +516,14 @@ def run_lever_discovery(boards: dict | None = None, workers: int = 1) -> dict:
             total_found += result["found"]
             if "error" in result:
                 errors += 1
+            progress.update(
+                task_id,
+                advance=1,
+                target=result["board"],
+                new=total_new,
+                dupes=total_existing,
+                errors=errors,
+            )
             if i % 10 == 0 or i == len(board_items):
                 elapsed = time.time() - t0
                 log.info(
@@ -487,6 +531,22 @@ def run_lever_discovery(boards: dict | None = None, workers: int = 1) -> dict:
                     i, len(board_items), total_new, total_existing, errors, elapsed,
                 )
 
+    if owns_progress:
+        with progress:
+            task_id = progress.add_task(
+                "Lever crawl",
+                total=len(board_items),
+                target="-",
+                new=0,
+                dupes=0,
+                errors=0,
+            )
+            _run_boards()
+    else:
+        assert progress is not None
+        assert task_id is not None
+        progress.update(task_id, total=len(board_items), completed=0, target="-", new=0, dupes=0, errors=0)
+        _run_boards()
     elapsed = time.time() - t0
     log.info(
         "Lever crawl done: %d found, %d new, %d existing across %d boards in %.0fs",

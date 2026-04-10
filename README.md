@@ -22,7 +22,7 @@ https://github.com/user-attachments/assets/7ee3417f-43d4-4245-9952-35df1e77f2df
 
 ## What It Does
 
-ApplyPilot is a 6-stage autonomous job application pipeline. It discovers jobs from official Workday, Greenhouse, and Lever company portals, scores them against your resume with AI, tailors your resume per job, writes cover letters, and **submits applications for you**. It navigates forms, uploads documents, answers screening questions, all hands-free.
+ApplyPilot is a 6-stage autonomous job application pipeline. It discovers jobs from official Workday, Greenhouse, Lever, and Avature company portals, scores them against your resume with AI, tailors your resume per job, writes cover letters, and **submits applications for you**. It navigates forms, uploads documents, answers screening questions, all hands-free.
 
 Typical flow:
 
@@ -95,7 +95,7 @@ Runs stages 1-5: discovers jobs, scores them, tailors your resume, generates cov
 
 | Stage | What Happens |
 |-------|-------------|
-| **1. Discover** | Scrapes 51 Workday employer portals + 47 Greenhouse company boards + 16 Lever company boards |
+| **1. Discover** | Scrapes 51 Workday employer portals + 47 Greenhouse company boards + 16 Lever company boards + 1 Avature portal |
 | **2. Enrich** | Fetches full job descriptions via JSON-LD, CSS selectors, or AI-powered extraction |
 | **3. Score** | AI rates every job 1-10 based on your resume and preferences. Only high-fit jobs proceed |
 | **4. Tailor** | AI rewrites your resume per job: reorganizes, emphasizes relevant experience, adds keywords. Never fabricates |
@@ -110,11 +110,11 @@ Each stage is independent. Run them all or pick what you need.
 
 | Feature | ApplyPilot | AIHawk | Manual |
 |---------|-----------|--------|--------|
-| Job discovery | Official ATS only: Workday + Greenhouse + Lever | LinkedIn only | One board at a time |
+| Job discovery | Official ATS only: Workday + Greenhouse + Lever + Avature | LinkedIn only | One board at a time |
 | AI scoring | 1-10 fit score per job | Basic filtering | Your gut feeling |
 | Resume tailoring | Per-job AI rewrite | Template-based | Hours per application |
 | Auto-apply | Full form navigation + submission | LinkedIn Easy Apply only | Click, type, repeat |
-| Supported sites | 51 Workday portals, 47 Greenhouse boards, 16 Lever boards | LinkedIn | Whatever you open |
+| Supported sites | 51 Workday portals, 47 Greenhouse boards, 16 Lever boards, 1 Avature portal | LinkedIn | Whatever you open |
 | License | AGPL-3.0 | MIT | N/A |
 
 ---
@@ -165,6 +165,7 @@ API keys and runtime config: `GEMINI_API_KEY`, `LLM_MODEL`, `CAPSOLVER_API_KEY` 
 - `config/employers.yaml` - Workday employer registry (51 preconfigured)
 - `config/greenhouse.yaml` - Greenhouse company board registry (47 preconfigured)
 - `config/lever.yaml` - Lever company board registry (16 preconfigured)
+- `config/avature.yaml` - Avature employer portal registry (1 preconfigured: Siemens)
 - `config/sites.yaml` - Blocked sites, base URLs, manual ATS domains (board scraping disabled)
 - `config/searches.example.yaml` - Example search configuration
 
@@ -179,6 +180,7 @@ High-level behavior:
 - `Workday` searches each configured query across the built-in employer registry
 - `Greenhouse` fetches curated company boards once and filters jobs locally against your query list
 - `Lever` fetches curated company boards once and filters jobs locally against your query list
+- `Avature` crawls curated company search portals page-by-page and then filters jobs locally against your query list
 - discovered jobs are deduplicated and then filtered by location rules before later stages
 
 In practice:
@@ -199,7 +201,7 @@ If discovery feels too broad, narrow the query list first. If it feels too narro
 ## How Stages Work
 
 ### Discover
-Scrapes 51 verified Workday employer portals (configurable in `employers.yaml`). Fetches 47 curated Greenhouse company boards via the public Job Board API. Fetches 16 curated Lever company boards via the public Lever Postings API. Deduplicates by URL.
+Scrapes 51 verified Workday employer portals (configurable in `employers.yaml`). Fetches 47 curated Greenhouse company boards via the public Job Board API. Fetches 16 curated Lever company boards via the public Lever Postings API. Crawls 1 curated Avature company portal via server-rendered search pages and job-detail pages. Deduplicates by URL.
 
 ### Enrich
 Visits each job URL and extracts the full description. 3-tier cascade: JSON-LD structured data, then CSS selector patterns, then AI-powered extraction for unknown layouts.

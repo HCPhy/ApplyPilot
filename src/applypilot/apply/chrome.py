@@ -226,9 +226,7 @@ def launch_chrome(worker_id: int, port: int | None = None,
         "--password-store=basic",
         "--disable-save-password-bubble",
         "--disable-popup-blocking",
-        # Block dangerous permissions at browser level
-        "--use-fake-device-for-media-stream",
-        "--use-fake-ui-for-media-stream",
+        # Block dangerous permissions at browser level without auto-granting them
         "--deny-permission-prompts",
         "--disable-notifications",
     ]

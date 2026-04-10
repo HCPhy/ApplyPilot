@@ -6,15 +6,25 @@ import logging
 from typing import Optional
 
 import typer
-from rich.console import Console
+from rich.logging import RichHandler
 from rich.table import Table
 
 from applypilot import __version__
+from applypilot.ui import console
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt="%H:%M:%S",
+    format="%(message)s",
+    handlers=[
+        RichHandler(
+            console=console,
+            show_time=True,
+            show_level=True,
+            show_path=False,
+            omit_repeated_times=False,
+        )
+    ],
+    force=True,
 )
 
 app = typer.Typer(
@@ -22,7 +32,6 @@ app = typer.Typer(
     help="AI-powered end-to-end job application pipeline.",
     no_args_is_help=True,
 )
-console = Console()
 log = logging.getLogger(__name__)
 
 # Valid pipeline stages (in execution order)
@@ -148,8 +157,15 @@ def apply(
     workers: int = typer.Option(1, "--workers", "-w", help="Number of parallel browser workers."),
     min_score: int = typer.Option(7, "--min-score", help="Minimum fit score for job selection."),
     model: str = typer.Option("haiku", "--model", "-m", help="Claude model name."),
+    effort: str = typer.Option("low", "--effort", help="Claude reasoning effort: low, medium, high, or max."),
+    max_budget_usd: Optional[float] = typer.Option(None, "--max-budget-usd", help="Hard per-job Claude budget cap in USD."),
     continuous: bool = typer.Option(False, "--continuous", "-c", help="Run forever, polling for new jobs."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview actions without submitting."),
+    use_base_resume: bool = typer.Option(
+        False,
+        "--use-base-resume",
+        help="Apply using your master resume instead of requiring tailored resumes.",
+    ),
     headless: bool = typer.Option(False, "--headless", help="Run browsers in headless mode."),
     url: Optional[str] = typer.Option(None, "--url", help="Apply to a specific job URL."),
     gen: bool = typer.Option(False, "--gen", help="Generate prompt file for manual debugging instead of running."),
@@ -161,7 +177,12 @@ def apply(
     """Launch auto-apply to submit job applications."""
     _bootstrap()
 
-    from applypilot.config import check_tier, PROFILE_PATH as _profile_path
+    from applypilot.config import (
+        check_tier,
+        PROFILE_PATH as _profile_path,
+        RESUME_PATH as _resume_path,
+        RESUME_PDF_PATH as _resume_pdf_path,
+    )
     from applypilot.database import get_connection
 
     # --- Utility modes (no Chrome/Claude needed) ---
@@ -197,17 +218,43 @@ def apply(
         )
         raise typer.Exit(code=1)
 
-    # Check 3: Tailored resumes exist (skip for --gen with --url)
+    # Check 3: Resume assets / queue exist (skip for --gen with --url)
     if not (gen and url):
         conn = get_connection()
-        ready = conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE tailored_resume_path IS NOT NULL AND applied_at IS NULL"
-        ).fetchone()[0]
+        if use_base_resume:
+            if not _resume_pdf_path.exists():
+                console.print(
+                    "[red]Base resume PDF not found.[/red]\n"
+                    "Run [bold]applypilot init[/bold] or place your PDF at "
+                    f"[bold]{_resume_pdf_path}[/bold]."
+                )
+                raise typer.Exit(code=1)
+            if not _resume_path.exists():
+                console.print(
+                    "[yellow]Base resume text not found.[/yellow]\n"
+                    "Continuing with the PDF only may reduce autofill quality. "
+                    f"Expected text file at [bold]{_resume_path}[/bold]."
+                )
+            ready = conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE fit_score >= ? AND applied_at IS NULL",
+                (min_score,),
+            ).fetchone()[0]
+        else:
+            ready = conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE tailored_resume_path IS NOT NULL AND applied_at IS NULL"
+            ).fetchone()[0]
         if ready == 0:
-            console.print(
-                "[red]No tailored resumes ready.[/red]\n"
-                "Run [bold]applypilot run score tailor[/bold] first to prepare applications."
-            )
+            if use_base_resume:
+                console.print(
+                    "[red]No scored jobs ready.[/red]\n"
+                    f"Run [bold]applypilot run score[/bold] first, or lower [bold]--min-score[/bold] below {min_score}."
+                )
+            else:
+                console.print(
+                    "[red]No tailored resumes ready.[/red]\n"
+                    "Run [bold]applypilot run score tailor[/bold] first to prepare applications, "
+                    "or use [bold]--use-base-resume[/bold]."
+                )
             raise typer.Exit(code=1)
 
     if gen:
@@ -216,7 +263,12 @@ def apply(
         if not target:
             console.print("[red]--gen requires --url to specify which job.[/red]")
             raise typer.Exit(code=1)
-        prompt_file = gen_prompt(target, min_score=min_score, model=model)
+        prompt_file = gen_prompt(
+            target,
+            min_score=min_score,
+            model=model,
+            use_base_resume=use_base_resume,
+        )
         if not prompt_file:
             console.print("[red]No matching job found for that URL.[/red]")
             raise typer.Exit(code=1)
@@ -238,8 +290,12 @@ def apply(
     console.print(f"  Limit:    {'unlimited' if continuous else effective_limit}")
     console.print(f"  Workers:  {workers}")
     console.print(f"  Model:    {model}")
+    console.print(f"  Effort:   {effort}")
     console.print(f"  Headless: {headless}")
     console.print(f"  Dry run:  {dry_run}")
+    console.print(f"  Resume:   {'base' if use_base_resume else 'tailored'}")
+    if max_budget_usd is not None:
+        console.print(f"  Budget:   ${max_budget_usd:.2f}/job")
     if url:
         console.print(f"  Target:   {url}")
     console.print()
@@ -250,9 +306,12 @@ def apply(
         min_score=min_score,
         headless=headless,
         model=model,
+        effort=effort,
+        max_budget_usd=max_budget_usd,
         dry_run=dry_run,
         continuous=continuous,
         workers=workers,
+        use_base_resume=use_base_resume,
     )
 
 

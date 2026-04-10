@@ -170,8 +170,13 @@ def _setup_profile() -> dict:
     }
 
     # -- Availability --
+    relocate_us = Confirm.ask(
+        "Willing to relocate anywhere in the U.S. for onsite/hybrid roles?",
+        default=False,
+    )
     profile["availability"] = {
         "earliest_start_date": Prompt.ask("Earliest start date", default="Immediately"),
+        "relocation_scope": "us" if relocate_us else "local_only",
     }
 
     # Save

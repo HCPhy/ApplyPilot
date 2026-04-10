@@ -18,11 +18,13 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 
 import yaml
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
 from applypilot import config
 from applypilot.config import CONFIG_DIR
 from applypilot.database import get_connection, init_db
 from applypilot.discovery.location_filters import location_ok, normalize_location_preferences
+from applypilot.ui import console
 
 log = logging.getLogger(__name__)
 
@@ -374,6 +376,11 @@ def scrape_employers(
     accept_locs: list[str] | None = None,
     reject_locs: list[str] | None = None,
     workers: int = 1,
+    progress: Progress | None = None,
+    task_id: int | None = None,
+    progress_new_base: int = 0,
+    progress_dupes_base: int = 0,
+    progress_errors_base: int = 0,
 ) -> dict:
     """Run full scrape: search -> filter -> detail -> store.
 
@@ -418,6 +425,16 @@ def scrape_employers(
                 total_found += result["found"]
                 if "error" in result:
                     errors += 1
+                if progress is not None and task_id is not None:
+                    progress.update(
+                        task_id,
+                        advance=1,
+                        query=search_text,
+                        target=result["employer"],
+                        new=progress_new_base + total_new,
+                        dupes=progress_dupes_base + total_existing,
+                        errors=progress_errors_base + errors,
+                    )
 
                 if completed % 10 == 0 or completed == len(valid_keys):
                     elapsed = time.time() - t0
@@ -437,6 +454,16 @@ def scrape_employers(
             total_found += result["found"]
             if "error" in result:
                 errors += 1
+            if progress is not None and task_id is not None:
+                progress.update(
+                    task_id,
+                    advance=1,
+                    query=search_text,
+                    target=result["employer"],
+                    new=progress_new_base + total_new,
+                    dupes=progress_dupes_base + total_existing,
+                    errors=progress_errors_base + errors,
+                )
 
             if completed % 10 == 0 or completed == len(valid_keys):
                 elapsed = time.time() - t0
@@ -452,7 +479,12 @@ def scrape_employers(
 
 # -- Public entry point ------------------------------------------------------
 
-def run_workday_discovery(employers: dict | None = None, workers: int = 1) -> dict:
+def run_workday_discovery(
+    employers: dict | None = None,
+    workers: int = 1,
+    progress: Progress | None = None,
+    task_id: int | None = None,
+) -> dict:
     """Main entry point for Workday-based corporate job discovery.
 
     Loads employer registry from config/employers.yaml (or uses the provided
@@ -501,19 +533,81 @@ def run_workday_discovery(employers: dict | None = None, workers: int = 1) -> di
     grand_existing = 0
     grand_found = 0
 
-    for i, query in enumerate(queries, 1):
-        log.info("Query %d/%d: \"%s\"", i, len(queries), query)
-        result = scrape_employers(
-            search_text=query,
-            employers=employers,
-            location_filter=location_filter,
-            accept_locs=accept_locs,
-            reject_locs=reject_locs,
-            workers=workers,
+    total_steps = len(queries) * len(employers)
+    owns_progress = progress is None
+    if owns_progress:
+        progress = Progress(
+            TextColumn("[cyan]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            MofNCompleteColumn(),
+            TextColumn("[dim]query:[/dim] {task.fields[query]}"),
+            TextColumn("[dim]site:[/dim] {task.fields[target]}"),
+            TextColumn("[dim]new:[/dim] {task.fields[new]}"),
+            TextColumn("[dim]dupes:[/dim] {task.fields[dupes]}"),
+            TextColumn("[dim]err:[/dim] {task.fields[errors]}"),
+            TimeElapsedColumn(),
+            console=console,
+            transient=False,
         )
-        grand_new += result["new"]
-        grand_existing += result["existing"]
-        grand_found += result["found"]
+
+    def _run_queries() -> None:
+        nonlocal grand_new, grand_existing, grand_found, progress, task_id
+        assert progress is not None
+        assert task_id is not None
+
+        for i, query in enumerate(queries, 1):
+            log.info("Query %d/%d: \"%s\"", i, len(queries), query)
+            progress.update(task_id, query=query)
+            result = scrape_employers(
+                search_text=query,
+                employers=employers,
+                location_filter=location_filter,
+                accept_locs=accept_locs,
+                reject_locs=reject_locs,
+                workers=workers,
+                progress=progress,
+                task_id=task_id,
+                progress_new_base=grand_new,
+                progress_dupes_base=grand_existing,
+            )
+            grand_new += result["new"]
+            grand_existing += result["existing"]
+            grand_found += result["found"]
+            progress.update(
+                task_id,
+                query=query,
+                target="done",
+                new=grand_new,
+                dupes=grand_existing,
+            )
+
+    if owns_progress:
+        with progress:
+            task_id = progress.add_task(
+                "Workday crawl",
+                total=total_steps,
+                query="-",
+                target="-",
+                new=0,
+                dupes=0,
+                errors=0,
+            )
+            _run_queries()
+    else:
+        assert progress is not None
+        assert task_id is not None
+        progress.update(
+            task_id,
+            total=total_steps,
+            completed=0,
+            query="-",
+            target="-",
+            new=0,
+            dupes=0,
+            errors=0,
+        )
+        _run_queries()
 
     log.info("Workday crawl done: %d found, %d new, %d existing across %d queries x %d employers",
              grand_found, grand_new, grand_existing, len(queries), len(employers))
