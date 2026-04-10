@@ -1,0 +1,53 @@
+# ApplyPilot search configuration
+# Edit this file to refine your job search queries.
+
+defaults:
+  location: "Anywhere in the U.S."
+  distance: 4000
+  hours_old: 168
+  results_per_site: 50
+
+locations:
+  - location: "Anywhere in the U.S."
+    remote: false
+
+workday_max_tier: 3
+greenhouse_max_tier: 3
+lever_max_tier: 3
+avature_max_tier: 3
+
+queries:
+  - query: "*Research Engineer*"
+    tier: 1
+  - query: "*Software Engineer*"
+    tier: 1
+  - query: "*Research Engineer*Intern*"
+    tier: 2
+  - query: "*Software Engineer*Intern*"
+    tier: 2
+  - query: "*Software Developer Engineer*"
+    tier: 2
+  - query: "*Research and Development Engineer*"
+    tier: 2
+  - query: "*Scientific Software Engineer*"
+    tier: 3
+  - query: "*Software Developer Engineer*Intern*"
+    tier: 3
+  - query: "*Quantitative Developer*"
+    tier: 3
+  - query: "*Quantitative Developer*Intern*"
+    tier: 3
+  - query: "*Software Engineer*Infrastructure*"
+    tier: 3
+  - query: "*HPC Software Engineer*"
+    tier: 3
+  - query: "*HPC Software Engineer*Intern*"
+    tier: 3
+  - query: "*Machine Learning Research Engineer*"
+    tier: 3
+  - query: "*Machine Learning Research Engineer*Intern*"
+    tier: 3
+  - query: "*Computational Scientist*"
+    tier: 3
+  - query: "*Computational Scientist*Intern*"
+    tier: 3

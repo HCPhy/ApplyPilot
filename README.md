@@ -1,348 +1,324 @@
-<!-- logo here -->
+# ApplyPilot (Fork)
 
-> **⚠️ ApplyPilot** is the original open-source project, created by [Pickle-Pixel](https://github.com/Pickle-Pixel) and first published on GitHub on **February 17, 2026**. We are **not affiliated** with applypilot.app, useapplypilot.com, or any other product using the "ApplyPilot" name. These sites are **not associated with this project** and may misrepresent what they offer. If you're looking for the autonomous, open-source job application agent — you're in the right place.
+> This repository started as a fork of the original [Pickle-Pixel/ApplyPilot](https://github.com/Pickle-Pixel/ApplyPilot).
+> It now differs substantially from upstream in discovery scope, safety defaults, dashboard behavior, and recommended workflows.
+> If you want the upstream project or the published PyPI package behavior, use upstream directly.
+>
+> This repo is not affiliated with `applypilot.app`, `useapplypilot.com`, or any other product using the "ApplyPilot" name.
 
-# ApplyPilot
+This fork is an opinionated job-search and application pipeline focused on:
 
-**Applied to 1,000 jobs in 2 days. Fully autonomous. Open source.**
+- official employer ATS portals only
+- curated company registries instead of generic job-board scraping
+- safer, review-first application workflows
+- a firm-centric dashboard for triage
+- practical control over LLM cost
 
-[![PyPI version](https://img.shields.io/pypi/v/applypilot?color=blue)](https://pypi.org/project/applypilot/)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/Pickle-Pixel/ApplyPilot?style=social)](https://github.com/Pickle-Pixel/ApplyPilot)
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/S6S01UL5IO)
+The current pipeline is:
 
+`discover -> enrich -> score -> tailor -> cover -> pdf -> apply`
 
+The most important mental model is:
 
+- `applypilot run` prepares jobs and documents
+- `applypilot apply` opens the browser and can submit applications
+- `applypilot apply --dry-run` is the safe review mode
 
-https://github.com/user-attachments/assets/7ee3417f-43d4-4245-9952-35df1e77f2df
+## What This Fork Changes
 
+Compared with upstream, this fork currently does all of the following:
 
----
+- Discovery is limited to official ATS sources: Workday, Greenhouse, Lever, and Avature.
+- Generic board crawling like LinkedIn, Indeed, ZipRecruiter, and similar sources is intentionally out of scope.
+- The dashboard is firm-centric: you can filter by company, see apply state, and the UI remembers which jobs you clicked.
+- Auto-apply can use your base resume with `--use-base-resume`, so tailoring is optional when cost matters.
+- Relocation preference is explicit in the profile instead of being hardcoded into the apply prompt.
+- Discovery and filtering have been tuned toward curated U.S.-focused searches rather than broad board volume.
 
-## What It Does
+If you are maintaining this fork long-term, the README should describe this repo as its own product and stop assuming upstream behavior.
 
-ApplyPilot is a 6-stage autonomous job application pipeline. It discovers jobs from official Workday, Greenhouse, Lever, and Avature company portals, scores them against your resume with AI, tailors your resume per job, writes cover letters, and **submits applications for you**. It navigates forms, uploads documents, answers screening questions, all hands-free.
+## Install This Fork
 
-Typical flow:
+Do not rely on:
 
 ```bash
 pip install applypilot
-applypilot init          # one-time setup: resume, profile, preferences, API keys
-applypilot doctor        # verify your setup — shows what's installed and what's missing
-applypilot run           # discover > enrich > score > tailor > cover letters
-applypilot run -w 4      # same but parallel (4 threads for discovery/enrichment)
-applypilot apply         # autonomous browser-driven submission
-applypilot apply -w 3    # parallel apply (3 Chrome instances)
-applypilot apply --dry-run  # fill forms without submitting
 ```
 
----
+if you want this exact fork. That may install the upstream package instead of the code in this repository.
 
-## Mental Model
+Use a source install:
 
-The most important distinction in ApplyPilot is:
+```bash
+git clone <your-fork-url>
+cd ApplyPilot
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+applypilot init
+applypilot doctor
+```
 
-- `applypilot run` prepares applications. It does **not** submit anything.
-- `applypilot apply` opens the browser and **does** submit applications unless you use `--dry-run`.
-- `applypilot apply --dry-run` is the safe review mode: it fills and checks forms, but does not click the final submit button.
+## Requirements
 
-If you are new to the project, think of `run` as the research and document-prep pipeline, and `apply` as the browser automation step.
+| Component | Needed For | Notes |
+|---|---|---|
+| Python 3.11+ | Everything | Core runtime |
+| LLM provider | `score`, `tailor`, `cover` | Gemini, OpenAI, or a local OpenAI-compatible endpoint |
+| Chrome or Chromium | `apply` | Browser automation target |
+| Node.js 18+ | `apply` | Needed so `npx` can launch Playwright MCP |
+| Claude Code CLI | `apply` | Auto-apply agent runtime |
+| CapSolver API key | Optional | Only for CAPTCHA-heavy application flows |
 
----
+## Recommended Workflows
 
-## Recommended First Run
+### Cheapest Practical Workflow
 
-If you do not want fully autonomous submission on day one, use this workflow:
+Use this if you want to minimize token spend:
 
 ```bash
 applypilot init
 applypilot doctor
-applypilot run
-applypilot status
+applypilot run discover enrich score
+applypilot dashboard
+applypilot apply --use-base-resume --dry-run --limit 1
+```
+
+Then, if the dry run looks good:
+
+```bash
+applypilot apply --use-base-resume --limit 1
+```
+
+### Tailored Resume Workflow
+
+Use this if you want per-job resume customization:
+
+```bash
+applypilot run discover enrich score tailor cover pdf
+applypilot dashboard
+applypilot apply --dry-run --limit 1
+```
+
+### Safe First Run
+
+If you are new to this repo, this is the safest path:
+
+```bash
+applypilot init
+applypilot doctor
+applypilot run discover enrich score
 applypilot dashboard
 applypilot apply --dry-run --url "JOB_URL"
 applypilot apply --url "JOB_URL"
 ```
 
-Recommended safety settings for your first few real applications:
+Recommended safety habits:
 
 - use `--url` to target one job at a time
-- use `--workers 1`
-- do **not** use `--continuous`
-- do **not** use `--headless`
-- keep Chrome visible while it runs
+- keep `--workers 1` while testing
+- do not start with `--continuous`
+- keep Chrome visible
+- prefer `--dry-run` before real submission
 
-This gives you a practical human-in-the-loop workflow even though the default `apply` mode is autonomous.
+## Discovery Perimeter
 
----
+This fork intentionally discovers jobs only from official employer systems:
 
-## Two Paths
+- Workday
+- Greenhouse
+- Lever
+- Avature
 
-### Full Pipeline (recommended)
-**Requires:** Python 3.11+, Node.js (for npx), an LLM provider (Gemini, OpenAI, or local), Claude Code CLI, Chrome
+The exact company universe is defined by curated registries in:
 
-Runs all 6 stages, from job discovery to autonomous application submission. This is the full power of ApplyPilot.
+- `src/applypilot/config/employers.yaml`
+- `src/applypilot/config/greenhouse.yaml`
+- `src/applypilot/config/lever.yaml`
+- `src/applypilot/config/avature.yaml`
 
-### Discovery + Tailoring Only
-**Requires:** Python 3.11+, an LLM provider (Gemini, OpenAI, or local)
+That means:
 
-Runs stages 1-5: discovers jobs, scores them, tailors your resume, generates cover letters. You submit applications manually with the AI-prepared materials.
+- discovery quality depends on those registries
+- adding a new firm usually means adding the firm to the correct ATS registry
+- the README should avoid hardcoding lots of counts, because the registries change often in this fork
 
----
+## How Configuration Works
 
-## The Pipeline
+### `~/.applypilot/searches.yaml`
 
-| Stage | What Happens |
-|-------|-------------|
-| **1. Discover** | Scrapes 51 Workday employer portals + 47 Greenhouse company boards + 16 Lever company boards + 1 Avature portal |
-| **2. Enrich** | Fetches full job descriptions via JSON-LD, CSS selectors, or AI-powered extraction |
-| **3. Score** | AI rates every job 1-10 based on your resume and preferences. Only high-fit jobs proceed |
-| **4. Tailor** | AI rewrites your resume per job: reorganizes, emphasizes relevant experience, adds keywords. Never fabricates |
-| **5. Cover Letter** | AI generates a targeted cover letter per job |
-| **6. Auto-Apply** | Claude Code navigates application forms, fills fields, uploads documents, answers questions, and submits |
+This controls discovery:
 
-Each stage is independent. Run them all or pick what you need.
+- queries
+- locations
+- recency window
+- search tiers
 
----
+If you want to change what gets crawled, start here.
 
-## ApplyPilot vs The Alternatives
+### `~/.applypilot/profile.json`
 
-| Feature | ApplyPilot | AIHawk | Manual |
-|---------|-----------|--------|--------|
-| Job discovery | Official ATS only: Workday + Greenhouse + Lever + Avature | LinkedIn only | One board at a time |
-| AI scoring | 1-10 fit score per job | Basic filtering | Your gut feeling |
-| Resume tailoring | Per-job AI rewrite | Template-based | Hours per application |
-| Auto-apply | Full form navigation + submission | LinkedIn Easy Apply only | Click, type, repeat |
-| Supported sites | 51 Workday portals, 47 Greenhouse boards, 16 Lever boards, 1 Avature portal | LinkedIn | Whatever you open |
-| License | AGPL-3.0 | MIT | N/A |
+This controls downstream behavior:
 
----
+- personal info
+- work authorization
+- relocation scope
+- compensation
+- resume facts
+- skills boundaries
 
-## Requirements
+This affects scoring, tailoring, cover letters, and auto-apply.
 
-| Component | Required For | Details |
-|-----------|-------------|---------|
-| Python 3.11+ | Everything | Core runtime |
-| Node.js 18+ | Auto-apply | Needed for `npx` to run Playwright MCP server |
-| LLM provider | Scoring, tailoring, cover letters | Gemini, OpenAI, or a local OpenAI-compatible endpoint |
-| Chrome/Chromium | Auto-apply | Auto-detected on most systems |
-| Claude Code CLI | Auto-apply | Install from [claude.ai/code](https://claude.ai/code) |
+### `~/.applypilot/.env`
 
-**Gemini API key is free.** Get one at [aistudio.google.com](https://aistudio.google.com). OpenAI and local models (Ollama/llama.cpp) are also supported.
+This controls runtime credentials and model selection, for example:
 
-### Optional
+- `GEMINI_API_KEY`
+- `OPENAI_API_KEY`
+- `LLM_MODEL`
+- `LLM_URL`
+- `CAPSOLVER_API_KEY`
 
-| Component | What It Does |
-|-----------|-------------|
-| CapSolver API key | Solves CAPTCHAs during auto-apply (hCaptcha, reCAPTCHA, Turnstile, FunCaptcha). Without it, CAPTCHA-blocked applications just fail gracefully |
+## Pipeline Stages
 
-## Configuration
+| Stage | What It Does |
+|---|---|
+| `discover` | Pulls jobs from curated official ATS registries |
+| `enrich` | Fetches full descriptions and apply URLs |
+| `score` | Assigns an LLM fit score |
+| `tailor` | Generates a resume tailored to the job |
+| `cover` | Generates a cover letter |
+| `pdf` | Converts generated assets to PDF |
+| `apply` | Uses Claude Code plus browser automation to submit applications |
 
-All generated by `applypilot init`:
+Each stage can be run independently.
 
-### `profile.json`
-Your personal data in one structured file: contact info, work authorization, compensation, experience, skills, resume facts (preserved during tailoring), and EEO defaults.
-
-This powers:
-
-- scoring
-- tailoring
-- cover letters
-- form auto-fill during auto-apply
-
-It does **not** directly control which jobs are crawled.
-
-### `searches.yaml`
-Job search queries, target titles, locations, and crawl settings.
-
-This is the file that drives discovery. If you want to change what gets searched, which roles get queried, or which locations are targeted, edit `searches.yaml`.
-
-### `.env`
-API keys and runtime config: `GEMINI_API_KEY`, `LLM_MODEL`, `CAPSOLVER_API_KEY` (optional).
-
-### Package configs (shipped with ApplyPilot)
-- `config/employers.yaml` - Workday employer registry (51 preconfigured)
-- `config/greenhouse.yaml` - Greenhouse company board registry (47 preconfigured)
-- `config/lever.yaml` - Lever company board registry (16 preconfigured)
-- `config/avature.yaml` - Avature employer portal registry (1 preconfigured: Siemens)
-- `config/sites.yaml` - Blocked sites, base URLs, manual ATS domains (board scraping disabled)
-- `config/searches.example.yaml` - Example search configuration
-
----
-
-## How Targeting Works
-
-Discovery is targeted by `searches.yaml`, not by your resume or profile.
-
-High-level behavior:
-
-- `Workday` searches each configured query across the built-in employer registry
-- `Greenhouse` fetches curated company boards once and filters jobs locally against your query list
-- `Lever` fetches curated company boards once and filters jobs locally against your query list
-- `Avature` crawls curated company search portals page-by-page and then filters jobs locally against your query list
-- discovered jobs are deduplicated and then filtered by location rules before later stages
-
-In practice:
-
-- edit `searches.yaml` if you want to change crawl targets
-- edit `profile.json` if you want to change scoring/tailoring/application behavior
-
-The most important targeting fields are:
-
-- `queries`
-- `locations`
-- `defaults.hours_old`
-
-If discovery feels too broad, narrow the query list first. If it feels too narrow, add more query variants before touching the later AI stages.
-
----
-
-## How Stages Work
-
-### Discover
-Scrapes 51 verified Workday employer portals (configurable in `employers.yaml`). Fetches 47 curated Greenhouse company boards via the public Job Board API. Fetches 16 curated Lever company boards via the public Lever Postings API. Crawls 1 curated Avature company portal via server-rendered search pages and job-detail pages. Deduplicates by URL.
-
-### Enrich
-Visits each job URL and extracts the full description. 3-tier cascade: JSON-LD structured data, then CSS selector patterns, then AI-powered extraction for unknown layouts.
-
-### Score
-AI scores every job 1-10 against your profile. 9-10 = strong match, 7-8 = good, 5-6 = moderate, 1-4 = skip. Only jobs above your threshold proceed to tailoring.
-
-### Tailor
-Generates a custom resume per job: reorders experience, emphasizes relevant skills, incorporates keywords from the job description. Your `resume_facts` (companies, projects, metrics) are preserved exactly. The AI reorganizes but never fabricates.
-
-### Cover Letter
-Writes a targeted cover letter per job referencing the specific company, role, and how your experience maps to their requirements.
-
-### Auto-Apply
-Claude Code launches a Chrome instance, navigates to each application page, detects the form type, fills personal information and work history, uploads the tailored resume and cover letter, answers screening questions with AI, and submits. A live dashboard shows progress in real-time.
-
-The Playwright MCP server is configured automatically at runtime per worker. No manual MCP setup needed.
+Examples:
 
 ```bash
-# Utility modes (no Chrome/Claude needed)
-applypilot apply --mark-applied URL    # manually mark a job as applied
-applypilot apply --mark-failed URL     # manually mark a job as failed
-applypilot apply --reset-failed        # reset all failed jobs for retry
-applypilot apply --gen --url URL       # generate prompt file for manual debugging
+applypilot run discover enrich
+applypilot run score
+applypilot run tailor cover
+applypilot run all
 ```
 
----
+## Dashboard
 
-## Human-In-The-Loop
+The dashboard in this fork is meant for firm-by-firm triage, not just a flat list.
 
-ApplyPilot supports both autonomous and review-first workflows.
+It currently supports:
 
-- `applypilot run` is always safe from accidental submission because it never submits
-- `applypilot apply --dry-run` fills forms and checks the page, but does not click the final submit button
-- `applypilot apply` is autonomous and will submit if the form looks valid
+- firm filtering
+- score filtering
+- text search
+- applied, applying, and failed badges from the DB
+- remembered clicked jobs in the browser
 
-Important limitation:
+Open it with:
 
-- there is currently no built-in "pause and ask me before final submit" checkpoint in normal `apply` mode
+```bash
+applypilot dashboard
+```
 
-If you want practical human oversight, the best current workflow is:
+Important nuance:
 
-1. run `applypilot run`
-2. review output in `applypilot dashboard`
-3. use `applypilot apply --dry-run --url "JOB_URL"`
-4. run `applypilot apply --url "JOB_URL"` once you trust the result
+- apply state is persistent because it comes from SQLite
+- clicked or viewed state is browser-local because it is stored in `localStorage`
 
----
+## Auto-Apply Notes
+
+`applypilot apply` uses Claude Code plus a Playwright MCP browser toolchain.
+
+Useful modes:
+
+```bash
+applypilot apply --dry-run
+applypilot apply --use-base-resume
+applypilot apply --url "JOB_URL"
+applypilot apply --limit 1
+applypilot apply --mark-applied "JOB_URL"
+applypilot apply --mark-failed "JOB_URL" --fail-reason "manual"
+applypilot apply --reset-failed
+```
+
+Important limitations:
+
+- normal `apply` mode is autonomous
+- there is no built-in "pause before final submit" approval step
+- if you want human review, use `--dry-run` or target one URL at a time
+
+## CLI Quick Reference
+
+```bash
+applypilot init
+applypilot doctor
+applypilot run [stages...]
+applypilot run --workers 4
+applypilot run --stream
+applypilot run --validation normal
+applypilot apply
+applypilot apply --dry-run
+applypilot apply --use-base-resume
+applypilot apply --url URL
+applypilot status
+applypilot dashboard
+```
 
 ## Troubleshooting
 
 ### `applypilot run` did not submit any applications
 
-That is expected. `run` prepares jobs and documents only. Submission happens in `apply`.
+That is expected. Submission happens in `apply`, not in `run`.
 
 ### Every job scored as `0`
 
-In the current implementation, `0` is the failure sentinel for scoring, not a real "bad fit" score. It usually means:
+In this codebase, `0` is usually a scoring failure sentinel, not a real "bad fit" score.
 
-- the LLM request failed
-- the model returned an incompatible format
-- the model/provider is not compatible with the current request shape
-
-Check a few rows directly:
+Check a few rows:
 
 ```bash
 sqlite3 ~/.applypilot/applypilot.db \
 "select title, fit_score, substr(score_reasoning,1,300) from jobs where fit_score=0 limit 10;"
 ```
 
-If you see `LLM error: ...`, fix the provider/model issue first, then clear the bad scores and rescore:
+If you see `LLM error: ...`, fix the provider or model issue first, then clear and rescore.
+
+### `apply` starts but browser tools do not work
+
+Check both:
+
+- `node --version`
+- `npx --version`
+
+`npx` existing without a working `node` runtime is not enough.
+
+### Tailoring is too expensive
+
+Skip it and use:
 
 ```bash
-sqlite3 ~/.applypilot/applypilot.db \
-"update jobs
- set fit_score = NULL,
-     score_reasoning = NULL,
-     scored_at = NULL
- where fit_score = 0;"
-
-applypilot run score
+applypilot apply --use-base-resume
 ```
 
-### OpenAI `429 Too Many Requests`
+### Discovery feels too broad or too narrow
 
-That usually means one of:
+Edit `searches.yaml` first. Do not start by changing the scoring prompt.
 
-- requests-per-minute limit
-- tokens-per-minute limit
-- daily token limit
-- quota/billing issue on the API project being used
+## Reading The Code
 
-Check:
+If you are trying to understand the repo, start with:
 
-- your provider/model in `.env`
-- your OpenAI usage and limits page
-- whether the key belongs to the paid org/project you expect
+- `README.md`
+- `src/applypilot/cli.py`
+- `src/applypilot/pipeline.py`
+- `src/applypilot/database.py`
 
-### Which OpenAI model should I start with?
-
-For scoring, the safest OpenAI defaults are usually:
-
-- `gpt-4.1-mini`
-- `gpt-4o-mini`
-
-Use stronger or more expensive models later for tailoring if needed. If you switch models and want to rescore, clear the old `fit_score` values first as shown above.
-
----
-
-## CLI Reference
-
-```
-applypilot init                         # First-time setup wizard
-applypilot doctor                       # Verify setup, diagnose missing requirements
-applypilot run [stages...]              # Run pipeline stages (or 'all')
-applypilot run --workers 4              # Parallel discovery/enrichment
-applypilot run --stream                 # Concurrent stages (streaming mode)
-applypilot run --min-score 8            # Override score threshold
-applypilot run --dry-run                # Preview without executing
-applypilot run --validation lenient     # Relax validation (recommended for Gemini free tier)
-applypilot run --validation strict      # Strictest validation (retries on any banned word)
-applypilot apply                        # Launch auto-apply
-applypilot apply --workers 3            # Parallel browser workers
-applypilot apply --dry-run              # Fill forms without submitting
-applypilot apply --continuous           # Run forever, polling for new jobs
-applypilot apply --headless             # Headless browser mode
-applypilot apply --url URL              # Apply to a specific job
-applypilot status                       # Pipeline statistics
-applypilot dashboard                    # Open HTML results dashboard
-```
-
----
+Then use the longer walkthrough in [guide.md](guide.md).
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, and PR guidelines.
-
----
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-ApplyPilot is licensed under the [GNU Affero General Public License v3.0](LICENSE).
-
-You are free to use, modify, and distribute this software. If you deploy a modified version as a service, you must release your source code under the same license.
+This repository remains licensed under the [GNU Affero General Public License v3.0](LICENSE).

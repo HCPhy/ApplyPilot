@@ -28,6 +28,7 @@ from applypilot import config
 from applypilot.config import CONFIG_DIR
 from applypilot.database import get_connection, init_db
 from applypilot.discovery.location_filters import location_ok, normalize_location_preferences
+from applypilot.discovery.query_match import matches_query
 from applypilot.discovery.workday import strip_html
 from applypilot.ui import console
 
@@ -123,17 +124,7 @@ def _normalize_tokens(text: str) -> list[str]:
 
 def _matches_query(text: str, query: str) -> bool:
     """Return True if a job text matches a configured query."""
-    text_lower = text.lower()
-    query_lower = query.lower()
-    if query_lower in text_lower:
-        return True
-
-    query_tokens = _normalize_tokens(query)
-    if not query_tokens:
-        return False
-
-    text_tokens = set(_normalize_tokens(text))
-    return all(tok in text_tokens for tok in query_tokens)
+    return matches_query(text, query)
 
 
 def _title_allowed(title: str, queries: list[str], exclude_titles: list[str]) -> bool:

@@ -24,6 +24,7 @@ from applypilot import config
 from applypilot.config import CONFIG_DIR
 from applypilot.database import get_connection, init_db
 from applypilot.discovery.location_filters import location_ok, normalize_location_preferences
+from applypilot.discovery.query_match import query_to_search_text
 from applypilot.ui import console
 
 log = logging.getLogger(__name__)
@@ -141,11 +142,12 @@ def _urlopen(req, timeout=30):
 def workday_search(employer: dict, search_text: str, limit: int = 20, offset: int = 0) -> dict:
     """Search jobs via Workday CXS API. Returns JSON with total + jobPostings."""
     url = f"{employer['base_url']}/wday/cxs/{employer['tenant']}/{employer['site_id']}/jobs"
+    api_search_text = query_to_search_text(search_text)
     payload = json.dumps({
         "appliedFacets": {},
         "limit": limit,
         "offset": offset,
-        "searchText": search_text,
+        "searchText": api_search_text,
     }).encode()
 
     req = urllib.request.Request(url, data=payload, method="POST")
