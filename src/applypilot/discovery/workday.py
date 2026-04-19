@@ -22,7 +22,8 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskProgressC
 
 from applypilot import config
 from applypilot.config import CONFIG_DIR
-from applypilot.database import get_connection, init_db
+from applypilot.database import get_connection, init_db, prune_stale_jobs
+from applypilot.discovery.dates import normalize_posted_at
 from applypilot.discovery.location_filters import location_ok, normalize_location_preferences
 from applypilot.discovery.query_match import query_to_search_text
 from applypilot.ui import console
@@ -181,8 +182,12 @@ def search_employer(
     max_results: int = 0,
     accept_locs: list[str] | None = None,
     reject_locs: list[str] | None = None,
-) -> list[dict]:
-    """Search an employer, paginate through all results, optionally filter by location."""
+) -> tuple[list[dict], str | None]:
+    """Search an employer and return ``(jobs, error)``.
+
+    The error value is kept separate so stale cleanup can skip a target when
+    an API outage made the crawl incomplete.
+    """
     log.info("%s: searching \"%s\"...", employer["name"], search_text)
 
     all_jobs: list[dict] = []
@@ -190,12 +195,14 @@ def search_employer(
     page_size = 20
     max_pages = 25  # Cap at 500 results
     total = None
+    error: str | None = None
 
     while True:
         try:
             data = workday_search(employer, search_text, limit=page_size, offset=offset)
         except Exception as e:
             log.error("%s: API error at offset %d: %s", employer["name"], offset, e)
+            error = str(e)
             break
 
         if total is None:
@@ -234,7 +241,7 @@ def search_employer(
 
     log.info("%s: %d jobs found%s", employer["name"], len(all_jobs),
              " (filtered)" if location_filter else "")
-    return all_jobs
+    return all_jobs, error
 
 
 # -- Fetch details -----------------------------------------------------------
@@ -287,9 +294,16 @@ def fetch_details(employer: dict, jobs: list[dict]) -> list[dict]:
 
 # -- DB storage --------------------------------------------------------------
 
-def store_results(conn: sqlite3.Connection, jobs: list[dict], employers: dict) -> tuple[int, int]:
+def store_results(
+    conn: sqlite3.Connection,
+    jobs: list[dict],
+    employers: dict,
+    seen_at: str | None = None,
+) -> tuple[int, int]:
     """Store corporate jobs in DB. Returns (new, existing)."""
-    now = datetime.now(timezone.utc).isoformat()
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    seen_at = seen_at or now
     new = 0
     existing = 0
 
@@ -310,17 +324,22 @@ def store_results(conn: sqlite3.Connection, jobs: list[dict], employers: dict) -
 
         site = job.get("employer_name", "Corporate")
         strategy = "workday_api"
+        posted_at = normalize_posted_at(job.get("posted"), now=now_dt)
 
         try:
             conn.execute(
                 "INSERT INTO jobs (url, title, salary, description, location, site, strategy, "
-                "discovered_at, full_description, application_url, detail_scraped_at, detail_error) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "discovered_at, posted_at, last_seen_at, full_description, application_url, detail_scraped_at, detail_error) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (url, job.get("title"), None, short_desc, job.get("location"),
-                 site, strategy, now, full_description, url, detail_scraped_at, detail_error),
+                 site, strategy, now, posted_at, seen_at, full_description, url, detail_scraped_at, detail_error),
             )
             new += 1
         except sqlite3.IntegrityError:
+            conn.execute(
+                "UPDATE jobs SET posted_at = COALESCE(posted_at, ?), last_seen_at = ? WHERE url = ?",
+                (posted_at, seen_at, url),
+            )
             existing += 1
 
     conn.commit()
@@ -334,12 +353,13 @@ def _process_one(
     location_filter: bool,
     accept_locs: list[str],
     reject_locs: list[str],
+    seen_at: str,
 ) -> dict:
     """Search one employer, fetch details, store results."""
     emp = employers[employer_key]
 
     try:
-        jobs = search_employer(
+        jobs, search_error = search_employer(
             employer_key, emp, search_text,
             location_filter=location_filter,
             accept_locs=accept_locs,
@@ -347,12 +367,15 @@ def _process_one(
         )
     except Exception as e:
         log.error("%s: ERROR searching '%s': %s", emp["name"], search_text, e)
-        return {"employer": emp["name"], "query": search_text,
+        return {"employer": emp["name"], "employer_key": employer_key, "query": search_text,
                 "found": 0, "new": 0, "existing": 0, "error": str(e)}
 
     if not jobs:
-        return {"employer": emp["name"], "query": search_text,
-                "found": 0, "new": 0, "existing": 0}
+        result = {"employer": emp["name"], "employer_key": employer_key, "query": search_text,
+                  "found": 0, "new": 0, "existing": 0}
+        if search_error:
+            result["error"] = search_error
+        return result
 
     try:
         jobs = fetch_details(emp, jobs)
@@ -360,11 +383,14 @@ def _process_one(
         log.error("%s: ERROR fetching details for '%s': %s", emp["name"], search_text, e)
 
     conn = get_connection()
-    new, existing = store_results(conn, jobs, employers)
+    new, existing = store_results(conn, jobs, employers, seen_at=seen_at)
     log.info("%s: %d new, %d already in DB", emp["name"], new, existing)
 
-    return {"employer": emp["name"], "query": search_text,
-            "found": len(jobs), "new": new, "existing": existing}
+    result = {"employer": emp["name"], "employer_key": employer_key, "query": search_text,
+              "found": len(jobs), "new": new, "existing": existing}
+    if search_error:
+        result["error"] = search_error
+    return result
 
 
 # -- Main orchestrator -------------------------------------------------------
@@ -383,6 +409,7 @@ def scrape_employers(
     progress_new_base: int = 0,
     progress_dupes_base: int = 0,
     progress_errors_base: int = 0,
+    seen_at: str | None = None,
 ) -> dict:
     """Run full scrape: search -> filter -> detail -> store.
 
@@ -404,7 +431,9 @@ def scrape_employers(
     total_existing = 0
     total_found = 0
     errors = 0
+    error_keys: set[str] = set()
     t0 = time.time()
+    seen_at = seen_at or datetime.now(timezone.utc).isoformat()
 
     valid_keys = [k for k in employer_keys if k in employers]
 
@@ -415,7 +444,7 @@ def scrape_employers(
             futures = {
                 pool.submit(
                     _process_one, key, employers, search_text,
-                    location_filter, accept_locs, reject_locs,
+                    location_filter, accept_locs, reject_locs, seen_at,
                 ): key
                 for key in valid_keys
             }
@@ -427,6 +456,7 @@ def scrape_employers(
                 total_found += result["found"]
                 if "error" in result:
                     errors += 1
+                    error_keys.add(result["employer_key"])
                 if progress is not None and task_id is not None:
                     progress.update(
                         task_id,
@@ -448,7 +478,7 @@ def scrape_employers(
         for key in valid_keys:
             result = _process_one(
                 key, employers, search_text,
-                location_filter, accept_locs, reject_locs,
+                location_filter, accept_locs, reject_locs, seen_at,
             )
             completed += 1
             total_new += result["new"]
@@ -456,6 +486,7 @@ def scrape_employers(
             total_found += result["found"]
             if "error" in result:
                 errors += 1
+                error_keys.add(result["employer_key"])
             if progress is not None and task_id is not None:
                 progress.update(
                     task_id,
@@ -476,7 +507,13 @@ def scrape_employers(
     log.info("[%s] Done: %d found, %d new, %d dupes in %.0fs",
              search_text, total_found, total_new, total_existing, elapsed)
 
-    return {"found": total_found, "new": total_new, "existing": total_existing}
+    return {
+        "found": total_found,
+        "new": total_new,
+        "existing": total_existing,
+        "errors": errors,
+        "error_keys": sorted(error_keys),
+    }
 
 
 # -- Public entry point ------------------------------------------------------
@@ -528,12 +565,16 @@ def run_workday_discovery(
         setup_proxy(proxy)
 
     location_filter = search_cfg.get("workday_location_filter", True)
+    prune_stale = search_cfg.get("prune_stale_jobs", True)
+    seen_at = datetime.now(timezone.utc).isoformat()
 
     log.info("Workday crawl: %d queries x %d employers (workers=%d)", len(queries), len(employers), workers)
 
     grand_new = 0
     grand_existing = 0
     grand_found = 0
+    grand_errors = 0
+    error_keys: set[str] = set()
 
     total_steps = len(queries) * len(employers)
     owns_progress = progress is None
@@ -554,7 +595,7 @@ def run_workday_discovery(
         )
 
     def _run_queries() -> None:
-        nonlocal grand_new, grand_existing, grand_found, progress, task_id
+        nonlocal grand_new, grand_existing, grand_found, grand_errors, progress, task_id
         assert progress is not None
         assert task_id is not None
 
@@ -572,16 +613,21 @@ def run_workday_discovery(
                 task_id=task_id,
                 progress_new_base=grand_new,
                 progress_dupes_base=grand_existing,
+                progress_errors_base=grand_errors,
+                seen_at=seen_at,
             )
             grand_new += result["new"]
             grand_existing += result["existing"]
             grand_found += result["found"]
+            grand_errors += result.get("errors", 0)
+            error_keys.update(result.get("error_keys", []))
             progress.update(
                 task_id,
                 query=query,
                 target="done",
                 new=grand_new,
                 dupes=grand_existing,
+                errors=grand_errors,
             )
 
     if owns_progress:
@@ -611,6 +657,24 @@ def run_workday_discovery(
         )
         _run_queries()
 
+    stale_removed = 0
+    if prune_stale:
+        conn = get_connection()
+        cleanup_keys = sorted(set(employers) - error_keys)
+        for key in cleanup_keys:
+            site = employers[key].get("name", key)
+            stale_removed += prune_stale_jobs(
+                conn,
+                site=site,
+                strategies=("workday_api",),
+                seen_at=seen_at,
+            )
+        if stale_removed:
+            log.info("Workday stale cleanup: removed %d old jobs across %d successful employers",
+                     stale_removed, len(cleanup_keys))
+        if error_keys:
+            log.info("Workday stale cleanup: skipped %d employers with crawl errors", len(error_keys))
+
     log.info("Workday crawl done: %d found, %d new, %d existing across %d queries x %d employers",
              grand_found, grand_new, grand_existing, len(queries), len(employers))
 
@@ -619,4 +683,6 @@ def run_workday_discovery(
         "new": grand_new,
         "existing": grand_existing,
         "queries": len(queries),
+        "errors": grand_errors,
+        "stale_removed": stale_removed,
     }

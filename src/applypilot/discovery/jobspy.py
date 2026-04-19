@@ -16,6 +16,7 @@ from jobspy import scrape_jobs
 
 from applypilot import config
 from applypilot.database import get_connection, init_db, store_jobs
+from applypilot.discovery.dates import normalize_posted_at
 
 log = logging.getLogger(__name__)
 
@@ -155,6 +156,7 @@ def store_jobspy_results(conn: sqlite3.Connection, df, source_label: str) -> tup
             location_str = f"{location_str} (Remote)" if location_str else "Remote"
 
         strategy = "jobspy"
+        posted_at = normalize_posted_at(row.get("date_posted"))
 
         # If JobSpy gave us a full description, promote it directly
         full_description = None
@@ -169,13 +171,17 @@ def store_jobspy_results(conn: sqlite3.Connection, df, source_label: str) -> tup
         try:
             conn.execute(
                 "INSERT INTO jobs (url, title, salary, description, location, site, strategy, discovered_at, "
-                "full_description, application_url, detail_scraped_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "posted_at, last_seen_at, full_description, application_url, detail_scraped_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (url, title, salary, description, location_str, site_label, strategy, now,
-                 full_description, apply_url, detail_scraped_at),
+                 posted_at, now, full_description, apply_url, detail_scraped_at),
             )
             new += 1
         except sqlite3.IntegrityError:
+            conn.execute(
+                "UPDATE jobs SET posted_at = COALESCE(posted_at, ?), last_seen_at = ? WHERE url = ?",
+                (posted_at, now, url),
+            )
             existing += 1
 
     conn.commit()

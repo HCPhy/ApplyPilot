@@ -27,7 +27,8 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskProgressC
 
 from applypilot import config
 from applypilot.config import CONFIG_DIR
-from applypilot.database import get_connection, init_db
+from applypilot.database import get_connection, init_db, prune_stale_jobs
+from applypilot.discovery.dates import normalize_posted_at
 from applypilot.discovery.location_filters import location_ok, normalize_location_preferences
 from applypilot.discovery.query_match import matches_query, query_to_search_text
 from applypilot.discovery.workday import strip_html
@@ -396,9 +397,11 @@ def _fetch_one_detail(job: dict, timeout: int) -> dict:
     return parsed
 
 
-def _store_results(conn: sqlite3.Connection, jobs: list[dict]) -> tuple[int, int]:
+def _store_results(conn: sqlite3.Connection, jobs: list[dict], seen_at: str | None = None) -> tuple[int, int]:
     """Store Avature-discovered jobs in the DB with full descriptions when available."""
-    now = datetime.now(timezone.utc).isoformat()
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    seen_at = seen_at or now
     new = 0
     existing = 0
 
@@ -409,12 +412,13 @@ def _store_results(conn: sqlite3.Connection, jobs: list[dict]) -> tuple[int, int
         full_description = job.get("full_description")
         detail_scraped_at = now if full_description else None
         detail_error = job.get("detail_error")
+        posted_at = normalize_posted_at(job.get("updated_at"), now=now_dt)
 
         try:
             conn.execute(
                 "INSERT INTO jobs (url, title, salary, description, location, site, strategy, "
-                "discovered_at, full_description, application_url, detail_scraped_at, detail_error) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "discovered_at, posted_at, last_seen_at, full_description, application_url, detail_scraped_at, detail_error) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     url,
                     job.get("title"),
@@ -424,6 +428,8 @@ def _store_results(conn: sqlite3.Connection, jobs: list[dict]) -> tuple[int, int
                     job.get("site"),
                     job.get("strategy", "avature_html"),
                     now,
+                    posted_at,
+                    seen_at,
                     full_description,
                     job.get("application_url") or url,
                     detail_scraped_at,
@@ -432,6 +438,10 @@ def _store_results(conn: sqlite3.Connection, jobs: list[dict]) -> tuple[int, int
             )
             new += 1
         except sqlite3.IntegrityError:
+            conn.execute(
+                "UPDATE jobs SET posted_at = COALESCE(posted_at, ?), last_seen_at = ? WHERE url = ?",
+                (posted_at, seen_at, url),
+            )
             existing += 1
 
     conn.commit()
@@ -448,6 +458,7 @@ def _process_one(
     hours_old: int,
     request_timeout: int,
     detail_workers: int,
+    seen_at: str,
 ) -> dict:
     """Fetch and locally filter a single Avature board/query."""
     board_name = board.get("name", board_key)
@@ -457,6 +468,7 @@ def _process_one(
         log.error("%s: Avature listing crawl error: %s", board_name, e)
         return {
             "board": board_name,
+            "board_key": board_key,
             "query": query or "-",
             "found": 0,
             "new": 0,
@@ -487,9 +499,10 @@ def _process_one(
 
     matched = [job for job in detailed if _posted_recently(job.get("updated_at"), hours_old)]
     conn = get_connection()
-    new, existing = _store_results(conn, matched)
+    new, existing = _store_results(conn, matched, seen_at=seen_at)
     return {
         "board": board_name,
+        "board_key": board_key,
         "query": query or "-",
         "found": len(matched),
         "new": new,
@@ -520,6 +533,8 @@ def run_avature_discovery(
     hours_old = int(search_cfg.get("defaults", {}).get("hours_old", 72))
     request_timeout = int(search_cfg.get("avature_timeout_seconds", 45))
     detail_workers = int(search_cfg.get("avature_detail_workers", min(4, max(1, workers))))
+    prune_stale = search_cfg.get("prune_stale_jobs", True)
+    seen_at = datetime.now(timezone.utc).isoformat()
 
     if not queries:
         log.warning("No search queries configured in searches.yaml.")
@@ -536,6 +551,7 @@ def run_avature_discovery(
     total_found = 0
     total_pages = 0
     errors = 0
+    error_board_keys: set[str] = set()
     t0 = time.time()
 
     log.info(
@@ -579,6 +595,7 @@ def run_avature_discovery(
                         hours_old,
                         request_timeout,
                         detail_workers,
+                        seen_at,
                     ): (query, board_key)
                     for query, board_key, board in work_items
                 }
@@ -590,6 +607,7 @@ def run_avature_discovery(
                     total_pages += result.get("pages", 0)
                     if "error" in result:
                         errors += 1
+                        error_board_keys.add(result["board_key"])
                     progress.update(
                         task_id,
                         advance=1,
@@ -619,6 +637,7 @@ def run_avature_discovery(
                 hours_old,
                 request_timeout,
                 detail_workers,
+                seen_at,
             )
             total_new += result["new"]
             total_existing += result["existing"]
@@ -626,6 +645,7 @@ def run_avature_discovery(
             total_pages += result.get("pages", 0)
             if "error" in result:
                 errors += 1
+                error_board_keys.add(result["board_key"])
             progress.update(
                 task_id,
                 advance=1,
@@ -672,6 +692,24 @@ def run_avature_discovery(
         )
         _run_queries()
     elapsed = time.time() - t0
+    stale_removed = 0
+    if prune_stale:
+        conn = get_connection()
+        cleanup_keys = sorted(set(boards) - error_board_keys)
+        for key in cleanup_keys:
+            site = boards[key].get("name", key)
+            stale_removed += prune_stale_jobs(
+                conn,
+                site=site,
+                strategies=("avature_html",),
+                seen_at=seen_at,
+            )
+        if stale_removed:
+            log.info("Avature stale cleanup: removed %d old jobs across %d successful boards",
+                     stale_removed, len(cleanup_keys))
+        if error_board_keys:
+            log.info("Avature stale cleanup: skipped %d boards with crawl errors", len(error_board_keys))
+
     log.info(
         "Avature crawl done: %d found, %d new, %d existing across %d queries x %d boards (%d pages) in %.0fs",
         total_found, total_new, total_existing, len(queries), len(board_items), total_pages, elapsed,
@@ -685,4 +723,5 @@ def run_avature_discovery(
         "boards": len(board_items),
         "pages": total_pages,
         "errors": errors,
+        "stale_removed": stale_removed,
     }

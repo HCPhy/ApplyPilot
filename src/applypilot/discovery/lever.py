@@ -27,7 +27,8 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskProgressC
 
 from applypilot import config
 from applypilot.config import CONFIG_DIR
-from applypilot.database import get_connection, init_db
+from applypilot.database import get_connection, init_db, prune_stale_jobs
+from applypilot.discovery.dates import normalize_posted_at
 from applypilot.discovery.location_filters import location_ok, normalize_location_preferences
 from applypilot.discovery.query_match import matches_query
 from applypilot.discovery.workday import strip_html
@@ -310,9 +311,11 @@ def _parse_job(board: dict, raw_job: dict) -> dict:
     }
 
 
-def _store_results(conn: sqlite3.Connection, jobs: list[dict]) -> tuple[int, int]:
+def _store_results(conn: sqlite3.Connection, jobs: list[dict], seen_at: str | None = None) -> tuple[int, int]:
     """Store Lever-discovered jobs in the DB with full descriptions."""
-    now = datetime.now(timezone.utc).isoformat()
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    seen_at = seen_at or now
     new = 0
     existing = 0
 
@@ -322,12 +325,13 @@ def _store_results(conn: sqlite3.Connection, jobs: list[dict]) -> tuple[int, int
             continue
         full_description = job.get("full_description")
         detail_scraped_at = now if full_description else None
+        posted_at = normalize_posted_at(job.get("updated_at"), now=now_dt)
 
         try:
             conn.execute(
                 "INSERT INTO jobs (url, title, salary, description, location, site, strategy, "
-                "discovered_at, full_description, application_url, detail_scraped_at, detail_error) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "discovered_at, posted_at, last_seen_at, full_description, application_url, detail_scraped_at, detail_error) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     url,
                     job.get("title"),
@@ -337,6 +341,8 @@ def _store_results(conn: sqlite3.Connection, jobs: list[dict]) -> tuple[int, int
                     job.get("site"),
                     job.get("strategy", "lever_api"),
                     now,
+                    posted_at,
+                    seen_at,
                     full_description,
                     job.get("application_url") or url,
                     detail_scraped_at,
@@ -345,6 +351,10 @@ def _store_results(conn: sqlite3.Connection, jobs: list[dict]) -> tuple[int, int
             )
             new += 1
         except sqlite3.IntegrityError:
+            conn.execute(
+                "UPDATE jobs SET posted_at = COALESCE(posted_at, ?), last_seen_at = ? WHERE url = ?",
+                (posted_at, seen_at, url),
+            )
             existing += 1
 
     conn.commit()
@@ -360,13 +370,15 @@ def _process_one(
     exclude_titles: list[str],
     hours_old: int,
     request_timeout: int,
+    seen_at: str,
 ) -> dict:
     """Fetch and locally filter a single Lever board."""
     try:
         raw_jobs = lever_list_jobs(board, timeout=request_timeout)
     except Exception as e:
         log.error("%s: Lever API error: %s", board.get("name", board_key), e)
-        return {"board": board.get("name", board_key), "found": 0, "new": 0, "existing": 0, "error": str(e)}
+        return {"board": board.get("name", board_key), "board_key": board_key,
+                "found": 0, "new": 0, "existing": 0, "error": str(e)}
 
     matched: list[dict] = []
 
@@ -385,9 +397,10 @@ def _process_one(
         matched.append(_parse_job(board, raw_job))
 
     conn = get_connection()
-    new, existing = _store_results(conn, matched)
+    new, existing = _store_results(conn, matched, seen_at=seen_at)
     return {
         "board": board.get("name", board_key),
+        "board_key": board_key,
         "found": len(matched),
         "new": new,
         "existing": existing,
@@ -415,6 +428,8 @@ def run_lever_discovery(
     exclude_titles = search_cfg.get("exclude_titles", [])
     hours_old = int(search_cfg.get("defaults", {}).get("hours_old", 72))
     request_timeout = int(search_cfg.get("lever_timeout_seconds", 60))
+    prune_stale = search_cfg.get("prune_stale_jobs", True)
+    seen_at = datetime.now(timezone.utc).isoformat()
 
     proxy = search_cfg.get("proxy")
     if proxy:
@@ -425,6 +440,8 @@ def run_lever_discovery(
     total_existing = 0
     total_found = 0
     errors = 0
+    successful_board_keys: set[str] = set()
+    error_board_keys: set[str] = set()
     t0 = time.time()
 
     log.info(
@@ -465,6 +482,7 @@ def run_lever_discovery(
                         exclude_titles,
                         hours_old,
                         request_timeout,
+                        seen_at,
                     ): board_key
                     for board_key, board in board_items
                 }
@@ -475,6 +493,9 @@ def run_lever_discovery(
                     total_found += result["found"]
                     if "error" in result:
                         errors += 1
+                        error_board_keys.add(result["board_key"])
+                    else:
+                        successful_board_keys.add(result["board_key"])
                     progress.update(
                         task_id,
                         advance=1,
@@ -501,12 +522,16 @@ def run_lever_discovery(
                 exclude_titles,
                 hours_old,
                 request_timeout,
+                seen_at,
             )
             total_new += result["new"]
             total_existing += result["existing"]
             total_found += result["found"]
             if "error" in result:
                 errors += 1
+                error_board_keys.add(result["board_key"])
+            else:
+                successful_board_keys.add(result["board_key"])
             progress.update(
                 task_id,
                 advance=1,
@@ -539,6 +564,24 @@ def run_lever_discovery(
         progress.update(task_id, total=len(board_items), completed=0, target="-", new=0, dupes=0, errors=0)
         _run_boards()
     elapsed = time.time() - t0
+    stale_removed = 0
+    if prune_stale:
+        conn = get_connection()
+        cleanup_keys = sorted(successful_board_keys - error_board_keys)
+        for key in cleanup_keys:
+            site = boards[key].get("name", key)
+            stale_removed += prune_stale_jobs(
+                conn,
+                site=site,
+                strategies=("lever_api",),
+                seen_at=seen_at,
+            )
+        if stale_removed:
+            log.info("Lever stale cleanup: removed %d old jobs across %d successful boards",
+                     stale_removed, len(cleanup_keys))
+        if error_board_keys:
+            log.info("Lever stale cleanup: skipped %d boards with crawl errors", len(error_board_keys))
+
     log.info(
         "Lever crawl done: %d found, %d new, %d existing across %d boards in %.0fs",
         total_found, total_new, total_existing, len(board_items), elapsed,
@@ -550,4 +593,5 @@ def run_lever_discovery(
         "existing": total_existing,
         "boards": len(board_items),
         "errors": errors,
+        "stale_removed": stale_removed,
     }

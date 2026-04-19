@@ -24,7 +24,7 @@ from rich.console import Console
 from rich.live import Live
 
 from applypilot import config
-from applypilot.database import get_connection
+from applypilot.database import current_job_clause, get_connection
 from applypilot.apply import chrome, dashboard, prompt as prompt_mod
 from applypilot.apply.chrome import (
     launch_chrome, cleanup_worker, kill_all_chrome,
@@ -119,6 +119,7 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
             """, (target_url, target_url, like, like)).fetchone()
         else:
             blocked_sites, blocked_patterns = _load_blocked()
+            current_clause = current_job_clause("jobs")
             # Build parameterized filters to avoid SQL injection
             params: list = [min_score]
             site_clause = ""
@@ -139,6 +140,7 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
                   AND (apply_status IS NULL OR apply_status = 'failed')
                   AND (apply_attempts IS NULL OR apply_attempts < ?)
                   AND fit_score >= ?
+                  AND {current_clause}
                   {site_clause}
                   {url_clauses}
                 ORDER BY fit_score DESC, url

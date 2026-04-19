@@ -153,8 +153,11 @@ This controls discovery:
 - locations
 - recency window
 - search tiers
+- stale pruning with `prune_stale_jobs`
 
 If you want to change what gets crawled, start here.
+
+By default, official ATS discovery prunes stale rows after a successful crawl target finishes. The cleanup is scoped to the same firm and ATS strategy, and it is skipped for any firm/board that had a listing error so a temporary outage does not wipe your DB. Applied and in-progress rows are preserved as application history.
 
 ### `~/.applypilot/profile.json`
 
@@ -208,10 +211,15 @@ The dashboard in this fork is meant for firm-by-firm triage, not just a flat lis
 
 It currently supports:
 
+- newest-first ranking using ATS posted/updated dates when available
 - firm filtering
 - score filtering
+- sort switching between newest-first, highest-score, and firm A-Z
+- 100-job pagination so large crawls do not render thousands of cards at once
 - text search
+- unscored jobs, so fresh crawls are visible before LLM scoring
 - applied, applying, and failed badges from the DB
+- manual "marked applied" badges after confirming from the Apply link
 - remembered clicked jobs in the browser
 
 Open it with:
@@ -223,7 +231,8 @@ applypilot dashboard
 Important nuance:
 
 - apply state is persistent because it comes from SQLite
-- clicked or viewed state is browser-local because it is stored in `localStorage`
+- clicked/viewed state and manual "marked applied" state are browser-local because they are stored in `localStorage`
+- the HTML intentionally embeds only description previews and renders one page of cards at a time, so large crawls stay responsive
 
 ## Auto-Apply Notes
 

@@ -66,7 +66,8 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     so it won't destroy existing data.
 
     Schema columns by stage:
-      - Discovery:  url, title, salary, description, location, site, strategy, discovered_at
+      - Discovery:  url, title, salary, description, location, site, strategy,
+                    discovered_at, posted_at, last_seen_at
       - Enrichment: full_description, application_url, detail_scraped_at, detail_error
       - Scoring:    fit_score, score_reasoning, scored_at
       - Tailoring:  tailored_resume_path, tailored_at, tailor_attempts
@@ -98,6 +99,8 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
             site                  TEXT,
             strategy              TEXT,
             discovered_at         TEXT,
+            posted_at             TEXT,
+            last_seen_at          TEXT,
 
             -- Enrichment stage (detail_scraper)
             full_description      TEXT,
@@ -153,6 +156,8 @@ _ALL_COLUMNS: dict[str, str] = {
     "site": "TEXT",
     "strategy": "TEXT",
     "discovered_at": "TEXT",
+    "posted_at": "TEXT",
+    "last_seen_at": "TEXT",
     # Enrichment
     "full_description": "TEXT",
     "application_url": "TEXT",
@@ -349,17 +354,79 @@ def store_jobs(conn: sqlite3.Connection, jobs: list[dict],
             continue
         try:
             conn.execute(
-                "INSERT INTO jobs (url, title, salary, description, location, site, strategy, discovered_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO jobs (url, title, salary, description, location, site, strategy, "
+                "discovered_at, posted_at, last_seen_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (url, job.get("title"), job.get("salary"), job.get("description"),
-                 job.get("location"), site, strategy, now),
+                 job.get("location"), site, strategy, now,
+                 job.get("posted_at") or job.get("updated_at"), now),
             )
             new += 1
         except sqlite3.IntegrityError:
+            conn.execute(
+                "UPDATE jobs SET last_seen_at = ? WHERE url = ?",
+                (now, url),
+            )
             existing += 1
 
     conn.commit()
     return new, existing
+
+
+def prune_stale_jobs(
+    conn: sqlite3.Connection,
+    *,
+    site: str,
+    strategies: list[str] | tuple[str, ...],
+    seen_at: str,
+    preserve_applied: bool = True,
+) -> int:
+    """Delete stale jobs for one successful crawl target.
+
+    A job is stale when it belongs to the same firm/source strategy but was
+    not stamped with the current crawl's ``seen_at`` value. Cleanup is scoped
+    per firm + ATS strategy so an API outage or a different ATS cannot wipe
+    unrelated rows.
+    """
+    if not site or not strategies or not seen_at:
+        return 0
+
+    placeholders = ",".join("?" for _ in strategies)
+    sql = (
+        f"DELETE FROM jobs WHERE site = ? AND strategy IN ({placeholders}) "
+        "AND (last_seen_at IS NULL OR last_seen_at != ?)"
+    )
+    params: list[str] = [site, *strategies, seen_at]
+
+    if preserve_applied:
+        sql += " AND applied_at IS NULL AND COALESCE(apply_status, '') NOT IN ('applied', 'in_progress')"
+
+    cursor = conn.execute(sql, params)
+    conn.commit()
+    return cursor.rowcount if cursor.rowcount is not None else 0
+
+
+def current_job_clause(alias: str = "jobs") -> str:
+    """Return a SQL predicate that keeps only latest-seen job rows.
+
+    Discovery stamps each seen row with ``last_seen_at``. A row is considered
+    stale if another row for the same firm/source strategy has a newer
+    ``last_seen_at`` value. This predicate is intentionally non-destructive;
+    it is useful for queues/views that should ignore likely-closed postings
+    while the stricter deletion path remains scoped to successful crawl targets.
+    """
+    if not alias.replace("_", "").isalnum():
+        raise ValueError(f"Unsafe SQL alias: {alias!r}")
+
+    return (
+        "NOT EXISTS ("
+        "SELECT 1 FROM jobs newer "
+        f"WHERE COALESCE(newer.site, '') = COALESCE({alias}.site, '') "
+        f"AND COALESCE(newer.strategy, '') = COALESCE({alias}.strategy, '') "
+        "AND newer.last_seen_at IS NOT NULL "
+        f"AND ({alias}.last_seen_at IS NULL OR newer.last_seen_at > {alias}.last_seen_at)"
+        ")"
+    )
 
 
 def get_jobs_by_stage(conn: sqlite3.Connection | None = None,
@@ -410,7 +477,7 @@ def get_jobs_by_stage(conn: sqlite3.Connection | None = None,
         where += " AND fit_score >= ?"
         params.append(min_score)
 
-    query = f"SELECT * FROM jobs WHERE {where} ORDER BY fit_score DESC NULLS LAST, discovered_at DESC"
+    query = f"SELECT * FROM jobs WHERE {where} ORDER BY fit_score DESC NULLS LAST, COALESCE(posted_at, discovered_at) DESC"
     if limit > 0:
         query += " LIMIT ?"
         params.append(limit)

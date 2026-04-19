@@ -86,6 +86,10 @@ location:
 defaults:
   hours_old: 72          # Only jobs posted within this many hours
 
+# Remove stale jobs after a successful official ATS crawl target finishes.
+# This is scoped per firm + ATS and skipped for targets with crawl errors.
+prune_stale_jobs: true
+
 # Negative keywords -- skip jobs with these in the title (case-insensitive)
 exclude_titles:
   - "senior director"
