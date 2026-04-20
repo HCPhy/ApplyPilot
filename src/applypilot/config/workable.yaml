@@ -1,0 +1,19 @@
+# Curated Workable public account registry for ApplyPilot.
+# Add entries using the Workable account subdomain.
+
+boards:
+  doist:
+    name: "Doist"
+    subdomain: "doist"
+
+  getresponse:
+    name: "GetResponse"
+    subdomain: "getresponse"
+
+  jagex:
+    name: "Jagex"
+    subdomain: "jagex-limited"
+
+  ukio:
+    name: "Ukio"
+    subdomain: "ukio"

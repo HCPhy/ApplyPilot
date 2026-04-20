@@ -1,0 +1,101 @@
+# ApplyPilot search preset: physics postdoc jobs.
+# Copy or merge this into ~/.applypilot/searches.yaml when you want to run a
+# physics/postdoc search instead of the default software-engineering search.
+
+queries:
+  - query: "postdoc"
+    tier: 1
+  - query: "postdoctoral"
+    tier: 1
+  - query: "postdoctoral researcher"
+    tier: 1
+  - query: "postdoctoral fellow"
+    tier: 1
+  - query: "postdoctoral associate"
+    tier: 1
+  - query: "postdoctoral scholar"
+    tier: 1
+  - query: "postdoctoral appointee"
+    tier: 1
+  - query: "research associate"
+    tier: 2
+  - query: "research fellow"
+    tier: 2
+  - query: "quantum"
+    tier: 3
+  - query: "condensed matter"
+    tier: 3
+  - query: "high energy physics"
+    tier: 3
+  - query: "particle physics"
+    tier: 3
+  - query: "nuclear physics"
+    tier: 3
+  - query: "astrophysics"
+    tier: 3
+  - query: "cosmology"
+    tier: 3
+  - query: "plasma physics"
+    tier: 3
+
+# Physics postdocs are often international and onsite. Leave location filters
+# empty to show available postings everywhere. To limit to the United States,
+# uncomment the block below.
+locations: []
+location:
+  accept_patterns: []
+  reject_patterns: []
+
+# location:
+#   accept_patterns:
+#     - "United States"
+#     - "US"
+#     - "USA"
+#   reject_patterns: []
+
+defaults:
+  # Academic postdoc ads can stay open for months; do not use the 72h SWE window.
+  hours_old: 0
+
+prune_stale_jobs: true
+
+greenhouse_max_tier: 3
+lever_max_tier: 3
+avature_max_tier: 3
+workday_max_tier: 3
+ashby_max_tier: 3
+recruitee_max_tier: 3
+workable_max_tier: 3
+smartrecruiters_max_tier: 3
+major_tech_max_tier: 3
+academicjobsonline_max_tier: 3
+
+ashby_timeout_seconds: 60
+recruitee_timeout_seconds: 45
+workable_timeout_seconds: 45
+smartrecruiters_timeout_seconds: 60
+major_tech_timeout_seconds: 45
+academicjobsonline_timeout_seconds: 45
+academicjobsonline_use_default_queries: true
+
+exclude_titles:
+  - "assistant professor"
+  - "associate professor"
+  - "full professor"
+  - "professor"
+  - "faculty"
+  - "lecturer"
+  - "instructor"
+  - "chair"
+  - "director"
+  - "phd"
+  - "ph.d"
+  - "graduate"
+  - "student"
+  - "undergraduate"
+  - "intern"
+  - "internship"
+  - "postbaccalaureate"
+  - "master"
+  - "m.sc"
+  - "msc"

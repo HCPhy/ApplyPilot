@@ -49,11 +49,12 @@ def _date_meta(posted_at: str | None, discovered_at: str | None) -> tuple[str, s
     return label, source, int(parsed.timestamp()), parsed.isoformat()
 
 
-def generate_dashboard(output_path: str | None = None) -> str:
+def generate_dashboard(output_path: str | None = None, max_jobs: int = 0) -> str:
     """Generate an HTML dashboard of all jobs with fit scores.
 
     Args:
         output_path: Where to write the HTML file. Defaults to ~/.applypilot/dashboard.html.
+        max_jobs: Maximum number of job cards to embed. Use 0 for all jobs.
 
     Returns:
         Absolute path to the generated HTML file.
@@ -68,8 +69,10 @@ def generate_dashboard(output_path: str | None = None) -> str:
 
     columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
     has_posted_at = "posted_at" in columns
-    posted_select = "posted_at" if has_posted_at else "NULL AS posted_at"
-    newest_expr = "COALESCE(posted_at, discovered_at)" if has_posted_at else "discovered_at"
+    posted_select = "jobs.posted_at AS posted_at" if has_posted_at else "NULL AS posted_at"
+    newest_expr = "COALESCE(jobs.posted_at, jobs.discovered_at)" if has_posted_at else "jobs.discovered_at"
+    limit_clause = " LIMIT ?" if max_jobs > 0 else ""
+    limit_params = (max_jobs,) if max_jobs > 0 else ()
 
     # Stats
     total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
@@ -86,6 +89,7 @@ def generate_dashboard(output_path: str | None = None) -> str:
     applied = conn.execute(
         "SELECT COUNT(*) FROM jobs WHERE applied_at IS NOT NULL OR apply_status = 'applied'"
     ).fetchone()[0]
+    untouched = total - applied
 
     # Score distribution
     score_dist: dict[int, int] = {}
@@ -115,22 +119,35 @@ def generate_dashboard(output_path: str | None = None) -> str:
     # Dashboard triage shows unscored jobs too, but excludes fit_score=0 because
     # that is a scoring failure sentinel rather than a real score.
     jobs = conn.execute(f"""
-        SELECT url, title, salary, description, location, site, strategy,
-               substr(COALESCE(full_description, description, ''), 1, 300) AS desc_preview,
-               application_url, detail_error,
-               fit_score, score_reasoning, apply_status, applied_at, apply_error,
+        WITH latest_seen AS (
+            SELECT COALESCE(site, '') AS site_key,
+                   COALESCE(strategy, '') AS strategy_key,
+                   MAX(last_seen_at) AS latest_seen_at
+            FROM jobs
+            WHERE last_seen_at IS NOT NULL
+            GROUP BY COALESCE(site, ''), COALESCE(strategy, '')
+        )
+        SELECT jobs.url, jobs.title, jobs.salary, jobs.description,
+               jobs.location, jobs.site, jobs.strategy,
+               substr(COALESCE(jobs.full_description, jobs.description, ''), 1, 180) AS desc_preview,
+               jobs.application_url, jobs.detail_error,
+               jobs.fit_score, jobs.score_reasoning, jobs.apply_status,
+               jobs.applied_at, jobs.apply_error,
                {posted_select}, discovered_at, last_seen_at,
-               (
-                   SELECT MAX(j2.last_seen_at)
-                   FROM jobs j2
-                   WHERE COALESCE(j2.site, '') = COALESCE(jobs.site, '')
-                     AND COALESCE(j2.strategy, '') = COALESCE(jobs.strategy, '')
-                     AND j2.last_seen_at IS NOT NULL
-               ) AS latest_seen_at
+               latest_seen.latest_seen_at AS latest_seen_at
         FROM jobs
+        LEFT JOIN latest_seen
+          ON latest_seen.site_key = COALESCE(jobs.site, '')
+         AND latest_seen.strategy_key = COALESCE(jobs.strategy, '')
         WHERE fit_score IS NULL OR fit_score > 0
         ORDER BY {newest_expr} DESC, fit_score DESC, site, title
-    """).fetchall()
+        {limit_clause}
+    """, limit_params).fetchall()
+
+    loaded_jobs = len(jobs)
+    load_note = ""
+    if max_jobs > 0 and loaded_jobs < total:
+        load_note = f" Loaded freshest {loaded_jobs} of {total} jobs."
 
     # Color map per site
     colors = {
@@ -251,7 +268,7 @@ def generate_dashboard(output_path: str | None = None) -> str:
     <section class="jobs-section">
       <div class="list-heading">
         <h2>Jobs, Newest First</h2>
-        <p>Uses ATS posted/updated dates when available, then falls back to discovery time. Cards render 100 per page.</p>
+        <p>Uses ATS posted/updated dates when available, then falls back to discovery time. Cards render 100 per page.{load_note}</p>
       </div>
       <div class="pagination-controls" aria-label="Job pagination">
         <button type="button" class="page-btn" onclick="changePage(-1)" data-prev-page>Previous</button>
@@ -288,6 +305,7 @@ def generate_dashboard(output_path: str | None = None) -> str:
   .stat-scored .stat-num {{ color: #60a5fa; }}
   .stat-high .stat-num {{ color: #f59e0b; }}
   .stat-total .stat-num {{ color: #e2e8f0; }}
+  .stat-untouched .stat-num {{ color: #c4b5fd; }}
   .stat-applied .stat-num {{ color: #34d399; }}
 
   /* Filters */
@@ -300,6 +318,9 @@ def generate_dashboard(output_path: str | None = None) -> str:
   .search-input::placeholder {{ color: #64748b; }}
   .sort-select {{ background: #334155; border: 1px solid #475569; color: #e2e8f0; padding: 0.4rem 0.8rem; border-radius: 6px; font-size: 0.8rem; min-width: 220px; }}
   .firm-filter-summary {{ color: #94a3b8; font-size: 0.8rem; min-width: 7.5rem; }}
+  .filter-check {{ display: inline-flex; align-items: center; gap: 0.45rem; color: #cbd5e1; font-size: 0.8rem; cursor: pointer; user-select: none; }}
+  .filter-check input {{ width: 1rem; height: 1rem; accent-color: #34d399; }}
+  .filter-hint {{ color: #94a3b8; font-size: 0.8rem; }}
 
   /* Score distribution */
   .score-section {{ display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2.5rem; align-items: stretch; }}
@@ -422,6 +443,7 @@ def generate_dashboard(output_path: str | None = None) -> str:
 
 <div class="summary">
   <div class="stat-card stat-total"><div class="stat-num">{total}</div><div class="stat-label">Total Jobs</div></div>
+  <div class="stat-card stat-untouched"><div id="untouched-stat" class="stat-num">{untouched}</div><div class="stat-label">Untouched Jobs</div></div>
   <div class="stat-card stat-ok"><div class="stat-num">{ready}</div><div class="stat-label">Ready (desc + URL)</div></div>
   <div class="stat-card stat-scored"><div class="stat-num">{scored}</div><div class="stat-label">Scored by LLM</div></div>
   <div class="stat-card stat-high"><div class="stat-num">{high_fit}</div><div class="stat-label">Strong Fit (7+)</div></div>
@@ -437,6 +459,11 @@ def generate_dashboard(output_path: str | None = None) -> str:
   <button class="filter-btn" onclick="filterScore(8, this)">8+ Excellent</button>
   <button class="filter-btn" onclick="filterScore(9, this)">9+ Perfect</button>
   <button id="stale-toggle" class="filter-btn" onclick="toggleStale()">Show stale</button>
+  <label class="filter-check">
+    <input type="checkbox" id="show-applied-toggle">
+    Show applied jobs
+  </label>
+  <span id="applied-filter-summary" class="filter-hint"></span>
   <span class="filter-label" style="margin-left:1rem">Sort:</span>
   <select id="sort-order" class="sort-select" onchange="setSortOrder(this.value)">
     <option value="newest">Newest first</option>
@@ -486,8 +513,11 @@ let searchText = '';
 let selectedFirms = [];
 let sortOrder = 'newest';
 let showStale = false;
+let showApplied = false;
 let currentPage = 1;
 let currentJobs = JOBS.slice();
+const TOTAL_COUNT = {total};
+const LOADED_COUNT = {loaded_jobs};
 const DB_APPLIED_COUNT = {applied};
 const viewedJobs = new Set();
 const manualAppliedJobs = new Set();
@@ -549,6 +579,7 @@ function loadFilters() {{
     }}
     sortOrder = saved.sortOrder || 'newest';
     showStale = Boolean(saved.showStale);
+    showApplied = Boolean(saved.showApplied);
   }} catch (err) {{
     console.warn('Could not load dashboard filters', err);
   }}
@@ -556,7 +587,10 @@ function loadFilters() {{
 
 function saveFilters() {{
   try {{
-    localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify({{ minScore, searchText, selectedFirms, sortOrder, showStale }}));
+    localStorage.setItem(
+      FILTER_STORAGE_KEY,
+      JSON.stringify({{ minScore, searchText, selectedFirms, sortOrder, showStale, showApplied }})
+    );
   }} catch (err) {{
     console.warn('Could not save dashboard filters', err);
   }}
@@ -595,13 +629,16 @@ function markManualApplied(url) {{
   if (!url) return;
   manualAppliedJobs.add(url);
   saveManualAppliedJobs();
-  syncManualAppliedState();
+  updateManualAppliedSummary();
+  applyFilters();
 }}
 
 function updateManualAppliedSummary() {{
   const manualOnly = JOBS.filter(job => manualAppliedJobs.has(job.url) && !job.dbApplied).length;
   const stat = document.getElementById('applied-stat');
   if (stat) stat.textContent = DB_APPLIED_COUNT + manualOnly;
+  const untouchedStat = document.getElementById('untouched-stat');
+  if (untouchedStat) untouchedStat.textContent = TOTAL_COUNT - DB_APPLIED_COUNT - manualOnly;
 }}
 
 function syncManualAppliedState() {{
@@ -739,6 +776,29 @@ function toggleStale() {{
   applyFilters();
 }}
 
+function isAppliedJob(job) {{
+  return Boolean(job.dbApplied) || manualAppliedJobs.has(job.url);
+}}
+
+function syncAppliedToggle() {{
+  const checkbox = document.getElementById('show-applied-toggle');
+  if (checkbox) checkbox.checked = showApplied;
+  const summary = document.getElementById('applied-filter-summary');
+  if (summary) {{
+    const appliedCount = JOBS.filter(isAppliedJob).length;
+    summary.textContent = showApplied
+      ? `${{appliedCount}} applied shown`
+      : `${{appliedCount}} applied hidden`;
+  }}
+}}
+
+function setShowApplied(value) {{
+  showApplied = Boolean(value);
+  currentPage = 1;
+  saveFilters();
+  applyFilters();
+}}
+
 function changePage(delta) {{
   const pageCount = Math.max(1, Math.ceil(currentJobs.length / PAGE_SIZE));
   currentPage = Math.min(Math.max(1, currentPage + delta), pageCount);
@@ -748,6 +808,11 @@ function changePage(delta) {{
 
 function sortJobList(jobs) {{
   return jobs.slice().sort((a, b) => {{
+    if (showApplied) {{
+      const appliedA = isAppliedJob(a) ? 1 : 0;
+      const appliedB = isAppliedJob(b) ? 1 : 0;
+      if (appliedA !== appliedB) return appliedA - appliedB;
+    }}
     const scoreA = Number(a.score) || 0;
     const scoreB = Number(b.score) || 0;
     const timeA = Number(a.sortTs) || 0;
@@ -879,7 +944,9 @@ function applyFilters() {{
     const staleMatch = showStale || !job.isStale;
     return firmMatch && staleMatch;
   }});
-  currentJobs = sortJobList(scopedJobs.filter(job => {{
+  const visibleScopedJobs = scopedJobs.filter(job => showApplied || !isAppliedJob(job));
+  const hiddenAppliedCount = scopedJobs.length - visibleScopedJobs.length;
+  currentJobs = sortJobList(visibleScopedJobs.filter(job => {{
     const score = Number(job.score) || 0;
     const text = job.search || '';
     const scoreMatch = minScore <= 0 || score >= minScore;
@@ -892,10 +959,13 @@ function applyFilters() {{
       ? selectedFirms[0]
       : `${{selectedFirms.length}} firms`;
   const staleLabel = showStale ? 'including stale' : 'current only';
-  document.getElementById('job-count').textContent = `Showing ${{currentJobs.length}} of ${{scopedJobs.length}} jobs · ${{firmLabel}} · ${{staleLabel}} · 100 per page`;
+  const appliedLabel = showApplied ? 'including applied' : `${{hiddenAppliedCount}} applied hidden`;
+  const scopeLabel = showApplied ? 'jobs in current scope' : 'untouched jobs in current scope';
+  document.getElementById('job-count').textContent = `Showing ${{currentJobs.length}} of ${{visibleScopedJobs.length}} ${{scopeLabel}} · ${{firmLabel}} · ${{staleLabel}} · ${{appliedLabel}} · 100 per page`;
   renderCurrentPage();
   syncFirmControls();
   syncStaleToggle();
+  syncAppliedToggle();
 }}
 
 function initFirmRows() {{
@@ -930,6 +1000,11 @@ function initViewedLinks() {{
   }});
 }}
 
+function initAppliedToggle() {{
+  const checkbox = document.getElementById('show-applied-toggle');
+  if (checkbox) checkbox.addEventListener('change', () => setShowApplied(checkbox.checked));
+}}
+
 function initControls() {{
   loadViewedJobs();
   loadManualAppliedJobs();
@@ -946,10 +1021,12 @@ function initControls() {{
   }});
   syncStaleToggle();
   initFirmRows();
+  initAppliedToggle();
   initViewedLinks();
   initApplyConfirmModal();
   syncViewedState();
   syncManualAppliedState();
+  syncAppliedToggle();
 }}
 
 initControls();
@@ -967,12 +1044,19 @@ applyFilters();
     return abs_path
 
 
-def open_dashboard(output_path: str | None = None) -> None:
+def open_dashboard(
+    output_path: str | None = None,
+    max_jobs: int = 0,
+    open_browser: bool = True,
+) -> None:
     """Generate the dashboard and open it in the default browser.
 
     Args:
         output_path: Where to write the HTML file. Defaults to ~/.applypilot/dashboard.html.
+        max_jobs: Maximum number of job cards to embed. Use 0 for all jobs.
+        open_browser: Whether to open the generated HTML in the default browser.
     """
-    path = generate_dashboard(output_path)
-    console.print("[dim]Opening in browser...[/dim]")
-    webbrowser.open(f"file:///{path}")
+    path = generate_dashboard(output_path, max_jobs=max_jobs)
+    if open_browser:
+        console.print("[dim]Opening in browser...[/dim]")
+        webbrowser.open(f"file:///{path}")

@@ -31,6 +31,26 @@ queries:
     tier: 2
   - query: "data engineer"
     tier: 2
+  - query: "quantitative developer"
+    tier: 1
+  - query: "quant developer"
+    tier: 1
+  - query: "quantitative researcher"
+    tier: 1
+  - query: "quant researcher"
+    tier: 1
+  - query: "quantitative strategist"
+    tier: 2
+  - query: "quant strategist"
+    tier: 2
+  - query: "quantitative analyst"
+    tier: 2
+  - query: "strats developer"
+    tier: 2
+  - query: "trading engineer"
+    tier: 3
+  - query: "systematic trading"
+    tier: 3
   - query: "infrastructure engineer"
     tier: 2
   - query: "software developer"
@@ -89,6 +109,50 @@ defaults:
 # Remove stale jobs after a successful official ATS crawl target finishes.
 # This is scoped per firm + ATS and skipped for targets with crawl errors.
 prune_stale_jobs: true
+
+# Official ATS knobs. Each *_max_tier controls which query tiers are used for
+# that source's local title matching. Timeout values are per board request.
+greenhouse_max_tier: 3
+lever_max_tier: 3
+avature_max_tier: 3
+workday_max_tier: 3
+ashby_max_tier: 3
+recruitee_max_tier: 3
+workable_max_tier: 3
+smartrecruiters_max_tier: 3
+oracle_max_tier: 3
+major_tech_max_tier: 2
+academicjobsonline_max_tier: 3
+
+ashby_timeout_seconds: 60
+recruitee_timeout_seconds: 45
+workable_timeout_seconds: 45
+smartrecruiters_timeout_seconds: 60
+oracle_timeout_seconds: 45
+major_tech_timeout_seconds: 45
+academicjobsonline_timeout_seconds: 45
+oracle_use_default_queries: true
+academicjobsonline_use_default_queries: true
+amazon_timeout_seconds: 45
+apple_timeout_seconds: 45
+major_tech_max_pages: 4
+major_tech_page_size: 20
+oracle_max_pages: 4
+oracle_page_size: 25
+amazon_max_pages: 4
+amazon_page_size: 20
+apple_max_pages: 4
+
+# Optional: override Google Careers location searches. Without this, the
+# crawler uses configured non-remote locations and adds "United States" when
+# the accept patterns include US/USA/United States.
+# major_tech_locations:
+#   - "San Francisco, CA"
+#   - "United States"
+
+# Optional: override Amazon Jobs location searches.
+# amazon_locations:
+#   - "United States"
 
 # Negative keywords -- skip jobs with these in the title (case-insensitive)
 exclude_titles:

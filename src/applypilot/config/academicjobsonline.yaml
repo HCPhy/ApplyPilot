@@ -1,0 +1,27 @@
+# Curated AcademicJobsOnline discipline/application-platform pages.
+#
+# The URL below is the Physics listing sorted by country/state/city, which keeps
+# compact location metadata on each row for ApplyPilot's location filter.
+boards:
+  physics:
+    name: "AcademicJobsOnline Physics"
+    url: "https://academicjobsonline.org/ajo?joblst-1-0-0-0---0-s--"
+    default_queries:
+      - query: "postdoc"
+        tier: 1
+      - query: "postdoctoral"
+        tier: 1
+      - query: "postdoctoral researcher"
+        tier: 1
+      - query: "postdoctoral fellow"
+        tier: 1
+      - query: "postdoctoral associate"
+        tier: 1
+      - query: "postdoctoral scholar"
+        tier: 1
+      - query: "postdoctoral appointee"
+        tier: 1
+      - query: "research associate"
+        tier: 2
+      - query: "research fellow"
+        tier: 2

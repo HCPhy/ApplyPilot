@@ -101,12 +101,55 @@ def score_job(resume_text: str, job: dict) -> dict:
         return {"score": 0, "keywords": "", "reasoning": f"LLM error: {e}"}
 
 
-def run_scoring(limit: int = 0, rescore: bool = False) -> dict:
+def _rescore_selection_query(
+    limit: int = 0,
+    rescore: bool = False,
+    rescore_min_score: int | None = None,
+) -> tuple[str | None, tuple[int, ...]]:
+    """Build the SQL query for explicit rescore modes.
+
+    A thresholded rescore is intentionally strict: ``--min-score 7`` means
+    existing scores 8-10, not 7-10.
+    """
+    params: list[int] = []
+
+    if rescore_min_score is not None:
+        query = """
+            SELECT * FROM jobs
+            WHERE full_description IS NOT NULL
+              AND fit_score IS NOT NULL
+              AND fit_score > ?
+            ORDER BY fit_score DESC, COALESCE(posted_at, discovered_at) DESC
+        """
+        params.append(rescore_min_score)
+    elif rescore:
+        query = """
+            SELECT * FROM jobs
+            WHERE full_description IS NOT NULL
+            ORDER BY COALESCE(posted_at, discovered_at) DESC
+        """
+    else:
+        return None, ()
+
+    if limit > 0:
+        query += " LIMIT ?"
+        params.append(limit)
+
+    return query, tuple(params)
+
+
+def run_scoring(
+    limit: int = 0,
+    rescore: bool = False,
+    rescore_min_score: int | None = None,
+) -> dict:
     """Score unscored jobs that have full descriptions.
 
     Args:
         limit: Maximum number of jobs to score in this run.
         rescore: If True, re-score all jobs (not just unscored ones).
+        rescore_min_score: If set, re-score only jobs whose existing score
+            is strictly greater than this threshold.
 
     Returns:
         {"scored": int, "errors": int, "elapsed": float, "distribution": list}
@@ -114,16 +157,18 @@ def run_scoring(limit: int = 0, rescore: bool = False) -> dict:
     resume_text = RESUME_PATH.read_text(encoding="utf-8")
     conn = get_connection()
 
-    if rescore:
-        query = "SELECT * FROM jobs WHERE full_description IS NOT NULL"
-        if limit > 0:
-            query += f" LIMIT {limit}"
-        jobs = conn.execute(query).fetchall()
+    query, params = _rescore_selection_query(
+        limit=limit,
+        rescore=rescore,
+        rescore_min_score=rescore_min_score,
+    )
+    if query:
+        jobs = conn.execute(query, params).fetchall()
     else:
         jobs = get_jobs_by_stage(conn=conn, stage="pending_score", limit=limit)
 
     if not jobs:
-        log.info("No unscored jobs with descriptions found.")
+        log.info("No jobs matched the scoring selection.")
         return {"scored": 0, "errors": 0, "elapsed": 0.0, "distribution": []}
 
     # Convert sqlite3.Row to dicts if needed

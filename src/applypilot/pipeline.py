@@ -36,7 +36,13 @@ log = logging.getLogger(__name__)
 STAGE_ORDER = ("discover", "enrich", "score", "tailor", "cover", "pdf")
 
 STAGE_META: dict[str, dict] = {
-    "discover": {"desc": "Job discovery (official employer ATS only: Workday + Greenhouse + Lever + Avature)"},
+    "discover": {
+        "desc": (
+            "Job discovery (official employer/application sources: Workday, Greenhouse, Lever, Avature, "
+            "Ashby, Recruitee, Workable, SmartRecruiters, Oracle Cloud, AcademicJobsOnline, "
+            "and custom major-tech careers)"
+        )
+    },
     "enrich":   {"desc": "Detail enrichment (full descriptions + apply URLs)"},
     "score":    {"desc": "LLM scoring (fit 1-10)"},
     "tailor":   {"desc": "Resume tailoring (LLM + validation)"},
@@ -61,13 +67,38 @@ _UPSTREAM: dict[str, str | None] = {
 # ---------------------------------------------------------------------------
 
 def _run_discover(workers: int = 1) -> dict:
-    """Stage: Job discovery — official employer ATS scrapers only."""
+    """Stage: Job discovery — official employer/application-platform scrapers only."""
+    from applypilot.discovery.academicjobsonline import (
+        load_boards as load_academicjobsonline_boards,
+        run_academicjobsonline_discovery,
+    )
+    from applypilot.discovery.ashby import load_boards as load_ashby_boards, run_ashby_discovery
     from applypilot.discovery.avature import load_boards as load_avature_boards, run_avature_discovery
     from applypilot.discovery.greenhouse import load_boards as load_greenhouse_boards, run_greenhouse_discovery
     from applypilot.discovery.lever import load_boards as load_lever_boards, run_lever_discovery
+    from applypilot.discovery.major_tech import load_providers as load_major_tech_providers, run_major_tech_discovery
+    from applypilot.discovery.oracle import load_boards as load_oracle_boards, run_oracle_discovery
+    from applypilot.discovery.recruitee import load_boards as load_recruitee_boards, run_recruitee_discovery
+    from applypilot.discovery.smartrecruiters import (
+        load_boards as load_smartrecruiters_boards,
+        run_smartrecruiters_discovery,
+    )
+    from applypilot.discovery.workable import load_boards as load_workable_boards, run_workable_discovery
     from applypilot.discovery.workday import load_employers, run_workday_discovery
 
-    stats: dict = {"workday": None, "greenhouse": None, "lever": None, "avature": None}
+    stats: dict = {
+        "workday": None,
+        "greenhouse": None,
+        "lever": None,
+        "avature": None,
+        "ashby": None,
+        "recruitee": None,
+        "workable": None,
+        "smartrecruiters": None,
+        "oracle": None,
+        "major_tech": None,
+        "academicjobsonline": None,
+    }
 
     sources = {
         "workday": {
@@ -89,6 +120,41 @@ def _run_discover(workers: int = 1) -> dict:
             "label": "Avature",
             "style": "[blue]Avature[/blue]",
             "items": load_avature_boards(),
+        },
+        "ashby": {
+            "label": "Ashby",
+            "style": "[bright_magenta]Ashby[/bright_magenta]",
+            "items": load_ashby_boards(),
+        },
+        "recruitee": {
+            "label": "Recruitee",
+            "style": "[bright_blue]Recruitee[/bright_blue]",
+            "items": load_recruitee_boards(),
+        },
+        "workable": {
+            "label": "Workable",
+            "style": "[bright_green]Workable[/bright_green]",
+            "items": load_workable_boards(),
+        },
+        "smartrecruiters": {
+            "label": "SmartRecruiters",
+            "style": "[bright_yellow]SmartRecruiters[/bright_yellow]",
+            "items": load_smartrecruiters_boards(),
+        },
+        "oracle": {
+            "label": "Oracle Cloud",
+            "style": "[bright_blue]Oracle Cloud[/bright_blue]",
+            "items": load_oracle_boards(),
+        },
+        "major_tech": {
+            "label": "Major Tech",
+            "style": "[bright_cyan]Major Tech[/bright_cyan]",
+            "items": load_major_tech_providers(),
+        },
+        "academicjobsonline": {
+            "label": "AcademicJobsOnline",
+            "style": "[bright_cyan]AcademicJobsOnline[/bright_cyan]",
+            "items": load_academicjobsonline_boards(),
         },
     }
 
@@ -153,6 +219,55 @@ def _run_discover(workers: int = 1) -> dict:
                     progress=progress,
                     task_id=tasks["avature"],
                 ): "avature",
+                pool.submit(
+                    run_ashby_discovery,
+                    boards=sources["ashby"]["items"],
+                    workers=workers,
+                    progress=progress,
+                    task_id=tasks["ashby"],
+                ): "ashby",
+                pool.submit(
+                    run_recruitee_discovery,
+                    boards=sources["recruitee"]["items"],
+                    workers=workers,
+                    progress=progress,
+                    task_id=tasks["recruitee"],
+                ): "recruitee",
+                pool.submit(
+                    run_workable_discovery,
+                    boards=sources["workable"]["items"],
+                    workers=workers,
+                    progress=progress,
+                    task_id=tasks["workable"],
+                ): "workable",
+                pool.submit(
+                    run_smartrecruiters_discovery,
+                    boards=sources["smartrecruiters"]["items"],
+                    workers=workers,
+                    progress=progress,
+                    task_id=tasks["smartrecruiters"],
+                ): "smartrecruiters",
+                pool.submit(
+                    run_oracle_discovery,
+                    boards=sources["oracle"]["items"],
+                    workers=workers,
+                    progress=progress,
+                    task_id=tasks["oracle"],
+                ): "oracle",
+                pool.submit(
+                    run_major_tech_discovery,
+                    providers=sources["major_tech"]["items"],
+                    workers=workers,
+                    progress=progress,
+                    task_id=tasks["major_tech"],
+                ): "major_tech",
+                pool.submit(
+                    run_academicjobsonline_discovery,
+                    boards=sources["academicjobsonline"]["items"],
+                    workers=workers,
+                    progress=progress,
+                    task_id=tasks["academicjobsonline"],
+                ): "academicjobsonline",
             }
 
             for future in as_completed(futures):

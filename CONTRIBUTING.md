@@ -50,11 +50,18 @@ Workday employer portals are configured in `config/employers.yaml`. To add a new
 
 ### Adding New Official Employer Sources
 
-This repo now targets official employer-owned ATS portals only. Prefer adding firms to:
+This repo now targets official employer/application portals only. Prefer adding firms to:
 
 1. `config/employers.yaml` for Workday
 2. `config/greenhouse.yaml` for Greenhouse
 3. `config/lever.yaml` for Lever
+4. `config/avature.yaml` for Avature
+5. `config/ashby.yaml` for Ashby
+6. `config/recruitee.yaml` for Recruitee
+7. `config/workable.yaml` for Workable
+8. `config/smartrecruiters.yaml` for SmartRecruiters
+9. `config/major_tech.yaml` plus a firm-specific adapter for custom systems like Amazon, Apple, Google, or Uber
+10. `config/academicjobsonline.yaml` for AcademicJobsOnline discipline/application pages
 
 Please do not add third-party job boards or aggregators such as LinkedIn, Indeed, ZipRecruiter, Dice, Otta, or similar sites.
 

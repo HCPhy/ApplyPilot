@@ -152,6 +152,77 @@ def run(
 
 
 @app.command()
+def rescore(
+    min_score: int = typer.Option(
+        7,
+        "--min-score",
+        help="Only rescore jobs whose current fit_score is strictly greater than this value.",
+    ),
+    limit: int = typer.Option(
+        0,
+        "--limit",
+        "-l",
+        help="Maximum jobs to rescore. Use 0 for all matching jobs.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show how many jobs would be rescored without calling the LLM.",
+    ),
+) -> None:
+    """Refine existing fit scores above a threshold with the configured LLM."""
+    _bootstrap()
+
+    from applypilot.config import check_tier
+    from applypilot.database import get_connection
+    from applypilot.scoring.scorer import run_scoring
+
+    check_tier(2, "AI rescoring")
+
+    if min_score < 0 or min_score > 10:
+        console.print("[red]--min-score must be between 0 and 10.[/red]")
+        raise typer.Exit(code=1)
+    if limit < 0:
+        console.print("[red]--limit must be 0 or greater.[/red]")
+        raise typer.Exit(code=1)
+
+    conn = get_connection()
+    total = conn.execute(
+        """
+        SELECT COUNT(*) FROM jobs
+        WHERE full_description IS NOT NULL
+          AND fit_score IS NOT NULL
+          AND fit_score > ?
+        """,
+        (min_score,),
+    ).fetchone()[0]
+    selected = min(total, limit) if limit > 0 else total
+
+    console.print(
+        f"[bold]Rescore candidates:[/bold] {selected} job(s) "
+        f"with current score > {min_score}"
+    )
+    if limit > 0 and total > limit:
+        console.print(f"[dim]{total} match the threshold; --limit keeps this run to {limit}.[/dim]")
+
+    if dry_run:
+        return
+    if selected == 0:
+        console.print("[yellow]No matching jobs to rescore.[/yellow]")
+        return
+
+    result = run_scoring(limit=limit, rescore_min_score=min_score)
+
+    table = Table(title="Rescore Complete", show_header=True, header_style="bold cyan")
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Scored", str(result["scored"]))
+    table.add_row("Errors", str(result["errors"]))
+    table.add_row("Elapsed", f"{result['elapsed']:.1f}s")
+    console.print(table)
+
+
+@app.command()
 def apply(
     limit: Optional[int] = typer.Option(None, "--limit", "-l", help="Max applications to submit."),
     workers: int = typer.Option(1, "--workers", "-w", help="Number of parallel browser workers."),
@@ -382,13 +453,28 @@ def status() -> None:
 
 
 @app.command()
-def dashboard() -> None:
+def dashboard(
+    max_jobs: int = typer.Option(
+        0,
+        "--max-jobs",
+        help="Maximum job cards to embed in the HTML. Use 0 for all jobs.",
+    ),
+    no_open: bool = typer.Option(
+        False,
+        "--no-open",
+        help="Generate the dashboard without opening a browser.",
+    ),
+) -> None:
     """Generate and open the HTML dashboard in your browser."""
     _bootstrap()
 
     from applypilot.view import open_dashboard
 
-    open_dashboard()
+    if max_jobs < 0:
+        console.print("[red]--max-jobs must be 0 or greater.[/red]")
+        raise typer.Exit(code=1)
+
+    open_dashboard(max_jobs=max_jobs, open_browser=not no_open)
 
 
 @app.command()

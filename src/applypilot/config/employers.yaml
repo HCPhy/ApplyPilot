@@ -104,6 +104,12 @@ employers:
     site_id: "blackstone_careers"
     base_url: "https://blackstone.wd1.myworkdayjobs.com"
 
+  morgan_stanley:
+    name: "Morgan Stanley"
+    tenant: "ms"
+    site_id: "External"
+    base_url: "https://ms.wd5.myworkdayjobs.com"
+
   # ── Canadian Pension Funds ──────────────────────────────────────────────
 
   cppib:

@@ -1,0 +1,23 @@
+# Curated Recruitee careers-site registry for ApplyPilot.
+# Add entries using the subdomain from https://<subdomain>.recruitee.com.
+
+boards:
+  bunq:
+    name: "bunq"
+    subdomain: "bunq"
+
+  gradematch:
+    name: "GradeMatch"
+    subdomain: "gradematch"
+
+  hostaway:
+    name: "Hostaway"
+    subdomain: "hostaway"
+
+  nomitri:
+    name: "Nomitri"
+    subdomain: "nomitri"
+
+  verve_group:
+    name: "Verve Group"
+    subdomain: "vervegroup"

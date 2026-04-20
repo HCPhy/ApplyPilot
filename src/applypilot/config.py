@@ -13,7 +13,7 @@ DB_PATH = APP_DIR / "applypilot.db"
 PROFILE_PATH = APP_DIR / "profile.json"
 RESUME_PATH = APP_DIR / "resume.txt"
 RESUME_PDF_PATH = APP_DIR / "resume.pdf"
-SEARCH_CONFIG_PATH = APP_DIR / "searches.yaml"
+SEARCH_CONFIG_PATH = Path(os.environ.get("APPLYPILOT_SEARCH_CONFIG", APP_DIR / "searches.yaml"))
 ENV_PATH = APP_DIR / ".env"
 
 # Generated output
@@ -102,7 +102,7 @@ def load_profile() -> dict:
 
 
 def load_search_config() -> dict:
-    """Load search configuration from ~/.applypilot/searches.yaml."""
+    """Load search configuration from APPLYPILOT_SEARCH_CONFIG or ~/.applypilot/searches.yaml."""
     import yaml
     if not SEARCH_CONFIG_PATH.exists():
         # Fall back to package-shipped example
@@ -192,7 +192,7 @@ TIER_LABELS = {
 
 TIER_COMMANDS: dict[int, list[str]] = {
     1: ["init", "run discover", "run enrich", "status", "dashboard"],
-    2: ["run score", "run tailor", "run cover", "run pdf", "run"],
+    2: ["run score", "rescore", "run tailor", "run cover", "run pdf", "run"],
     3: ["apply"],
 }
 

@@ -1,0 +1,21 @@
+# Custom major-tech careers systems not covered by generic ATS adapters.
+# These providers use official employer endpoints/pages.
+
+providers:
+  amazon:
+    name: "Amazon"
+    enabled: true
+    locations:
+      - "United States"
+
+  apple:
+    name: "Apple"
+    enabled: true
+
+  google:
+    name: "Google"
+    enabled: true
+
+  uber:
+    name: "Uber"
+    enabled: true

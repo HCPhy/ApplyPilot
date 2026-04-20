@@ -157,11 +157,13 @@ class LLMClient:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
+        token_limit_key = "max_completion_tokens" if self._uses_max_completion_tokens() else "max_tokens"
+
         payload = {
             "model": self.model,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            token_limit_key: max_tokens,
         }
 
         resp = self._client.post(
@@ -176,6 +178,13 @@ class LLMClient:
             raise _GeminiCompatForbidden(resp)
 
         return self._handle_compat_response(resp)
+
+    def _uses_max_completion_tokens(self) -> bool:
+        """Return True for OpenAI Chat Completions models that reject max_tokens."""
+        if self.base_url.rstrip("/") != "https://api.openai.com/v1":
+            return False
+        model = self.model.lower()
+        return model.startswith(("gpt-5", "o1", "o3", "o4"))
 
     @staticmethod
     def _handle_compat_response(resp: httpx.Response) -> str:

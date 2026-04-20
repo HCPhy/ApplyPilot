@@ -55,7 +55,15 @@ base_urls:
 
 sites: []
 # Board-style and aggregator scraping is intentionally disabled in this repo.
-# Discovery now runs only against official employer-owned ATS sources:
+# Discovery now runs only against official employer/application sources:
 # - Workday portals from config/employers.yaml
 # - Greenhouse boards from config/greenhouse.yaml
 # - Lever boards from config/lever.yaml
+# - Avature boards from config/avature.yaml
+# - Ashby boards from config/ashby.yaml
+# - Recruitee boards from config/recruitee.yaml
+# - Workable boards from config/workable.yaml
+# - SmartRecruiters boards from config/smartrecruiters.yaml
+# - Oracle Cloud Recruiting boards from config/oracle.yaml
+# - Custom major-tech careers systems from config/major_tech.yaml
+# - Academic application platforms from config/academicjobsonline.yaml

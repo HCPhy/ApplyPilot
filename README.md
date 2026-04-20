@@ -28,12 +28,12 @@ The most important mental model is:
 
 Compared with upstream, this fork currently does all of the following:
 
-- Discovery is limited to official ATS sources: Workday, Greenhouse, Lever, and Avature.
+- Discovery is limited to official employer/application sources: curated ATS registries plus a small set of custom major-tech and academic systems.
 - Generic board crawling like LinkedIn, Indeed, ZipRecruiter, and similar sources is intentionally out of scope.
 - The dashboard is firm-centric: you can filter by company, see apply state, and the UI remembers which jobs you clicked.
 - Auto-apply can use your base resume with `--use-base-resume`, so tailoring is optional when cost matters.
 - Relocation preference is explicit in the profile instead of being hardcoded into the apply prompt.
-- Discovery and filtering have been tuned toward curated U.S.-focused searches rather than broad board volume.
+- Discovery and filtering are tuned toward curated official sources rather than broad generic board volume.
 
 If you are maintaining this fork long-term, the README should describe this repo as its own product and stop assuming upstream behavior.
 
@@ -121,14 +121,53 @@ Recommended safety habits:
 - keep Chrome visible
 - prefer `--dry-run` before real submission
 
+### Physics Postdoc Discovery
+
+Use the physics preset when you want postdoc roles instead of the default software search:
+
+```bash
+APPLYPILOT_SEARCH_CONFIG=src/applypilot/config/searches.physics-postdoc.yaml \
+applypilot run discover enrich score
+applypilot dashboard
+```
+
+This preset intentionally leaves location filters open because physics postdoc markets are often international. To make it U.S.-only, edit the commented `location` block in `src/applypilot/config/searches.physics-postdoc.yaml`.
+
+AcademicJobsOnline also has source-default postdoc queries in `src/applypilot/config/academicjobsonline.yaml`. That means it can still return physics postdocs when your active `~/.applypilot/searches.yaml` is aimed at another role. Set `academicjobsonline_use_default_queries: false` in `searches.yaml` if you want AJO to obey only your global queries.
+
+Important limitation: AcademicJobsOnline is only a starter pool. It catches many university and lab postings, but it is not enough for a serious physics postdoc search by itself.
+
+The physics/postdoc crawler should grow in this order:
+
+| Source | Why It Matters | Status |
+|---|---|---|
+| [AcademicJobsOnline Physics](https://academicjobsonline.org/ajo/physics) | Structured academic application platform with many postdoc ads | Implemented |
+| [AAS Job Register](https://aas.org/jobregister) | Strong astronomy, astrophysics, instrumentation, and observatory postdoc coverage | Not yet implemented |
+| [INSPIRE HEP Jobs](https://inspirehep.net/jobs) | High-energy, nuclear, accelerator, astroparticle, and related theory/experiment roles | Not yet implemented |
+| [APS Careers](https://www.aps.org/careers) | Broad physics roles across academia, national labs, and industry | Not yet implemented |
+| National lab career systems | Argonne, Brookhaven, Fermilab, Berkeley Lab, LANL, LLNL, ORNL, SLAC, and similar labs often post only on their own ATS | Partially covered only when a lab is already in an ATS registry |
+| University ATS pages | Many postdocs never appear on AJO or society boards | Add institution by institution through Workday, PageUp, Interfolio, or other official systems |
+
+Avoid treating broad commercial aggregators as primary sources. They can be useful for manual checking, but the crawler should prefer official application systems, professional society boards, and discipline-specific research job databases.
+
 ## Discovery Perimeter
 
-This fork intentionally discovers jobs only from official employer systems:
+This fork intentionally discovers jobs only from official employer/application systems:
 
 - Workday
 - Greenhouse
 - Lever
 - Avature
+- Ashby
+- Recruitee
+- Workable
+- SmartRecruiters
+- Oracle Cloud Recruiting
+- Amazon Jobs
+- Apple Careers
+- Google Careers
+- Uber Careers
+- AcademicJobsOnline discipline pages
 
 The exact company universe is defined by curated registries in:
 
@@ -136,11 +175,21 @@ The exact company universe is defined by curated registries in:
 - `src/applypilot/config/greenhouse.yaml`
 - `src/applypilot/config/lever.yaml`
 - `src/applypilot/config/avature.yaml`
+- `src/applypilot/config/ashby.yaml`
+- `src/applypilot/config/recruitee.yaml`
+- `src/applypilot/config/workable.yaml`
+- `src/applypilot/config/smartrecruiters.yaml`
+- `src/applypilot/config/oracle.yaml`
+- `src/applypilot/config/major_tech.yaml`
+- `src/applypilot/config/academicjobsonline.yaml`
 
 That means:
 
 - discovery quality depends on those registries
 - adding a new firm usually means adding the firm to the correct ATS registry
+- firms with custom career systems, such as Apple, Google, and Uber, need a firm-specific adapter
+- big-bank quant coverage currently includes Goldman Sachs and JPMorgan Chase through Oracle Cloud, and Morgan Stanley through Workday
+- academic searches need both a discipline source, such as AcademicJobsOnline Physics, and a matching search preset
 - the README should avoid hardcoding lots of counts, because the registries change often in this fork
 
 ## How Configuration Works
@@ -156,6 +205,12 @@ This controls discovery:
 - stale pruning with `prune_stale_jobs`
 
 If you want to change what gets crawled, start here.
+
+For physics postdoc searches, start from:
+
+- `src/applypilot/config/searches.physics-postdoc.yaml`
+
+You can run a one-off preset without replacing your active config by setting `APPLYPILOT_SEARCH_CONFIG`.
 
 By default, official ATS discovery prunes stale rows after a successful crawl target finishes. The cleanup is scoped to the same firm and ATS strategy, and it is skipped for any firm/board that had a listing error so a temporary outage does not wipe your DB. Applied and in-progress rows are preserved as application history.
 
@@ -201,9 +256,21 @@ Examples:
 ```bash
 applypilot run discover enrich
 applypilot run score
+applypilot rescore --min-score 7
 applypilot run tailor cover
 applypilot run all
 ```
+
+`applypilot run score` only scores jobs that do not already have a score.
+To refine existing high-score jobs after changing models or prompts, use:
+
+```bash
+applypilot rescore --min-score 7 --dry-run
+applypilot rescore --min-score 7 --limit 25
+```
+
+The threshold is strict: `--min-score 7` rescans jobs whose current score is
+greater than 7, so scores 8-10. Use `--limit` for a smaller first pass.
 
 ## Dashboard
 
@@ -226,6 +293,8 @@ Open it with:
 
 ```bash
 applypilot dashboard
+applypilot dashboard --max-jobs 1000
+applypilot dashboard --no-open
 ```
 
 Important nuance:
@@ -233,6 +302,7 @@ Important nuance:
 - apply state is persistent because it comes from SQLite
 - clicked/viewed state and manual "marked applied" state are browser-local because they are stored in `localStorage`
 - the HTML intentionally embeds only description previews and renders one page of cards at a time, so large crawls stay responsive
+- use `--max-jobs` for a lighter triage file when the database gets large
 
 ## Auto-Apply Notes
 
@@ -265,12 +335,14 @@ applypilot run [stages...]
 applypilot run --workers 4
 applypilot run --stream
 applypilot run --validation normal
+applypilot rescore --min-score 7
 applypilot apply
 applypilot apply --dry-run
 applypilot apply --use-base-resume
 applypilot apply --url URL
 applypilot status
 applypilot dashboard
+applypilot dashboard --max-jobs 1000
 ```
 
 ## Troubleshooting

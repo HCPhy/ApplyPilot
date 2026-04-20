@@ -1,0 +1,71 @@
+# Curated Ashby job board registry for ApplyPilot.
+# Board names are the last path segment from https://jobs.ashbyhq.com/<name>.
+
+boards:
+  aerovect:
+    name: "AeroVect"
+    job_board_name: "AeroVect"
+
+  compound:
+    name: "Compound Planning"
+    job_board_name: "compound"
+
+  datacurve:
+    name: "Datacurve AI"
+    job_board_name: "datacurve"
+
+  docker:
+    name: "Docker"
+    job_board_name: "docker"
+
+  eli:
+    name: "Eli Health"
+    job_board_name: "eli"
+
+  grepr:
+    name: "Grepr"
+    job_board_name: "grepr"
+
+  harvey:
+    name: "Harvey"
+    job_board_name: "harvey"
+
+  higharc:
+    name: "Higharc"
+    job_board_name: "higharc"
+
+  infinity:
+    name: "Infinity"
+    job_board_name: "infinity-constellation"
+
+  legion_health:
+    name: "Legion Health"
+    job_board_name: "legionhealth"
+
+  omnea:
+    name: "Omnea"
+    job_board_name: "omnea"
+
+  openai:
+    name: "OpenAI"
+    job_board_name: "openai"
+
+  perplexity:
+    name: "Perplexity"
+    job_board_name: "perplexity"
+
+  vanta:
+    name: "Vanta"
+    job_board_name: "vanta"
+
+  vetcove:
+    name: "Vetcove"
+    job_board_name: "Vetcove"
+
+  wheel:
+    name: "Wheel"
+    job_board_name: "wheel"
+
+  zencastr:
+    name: "Zencastr"
+    job_board_name: "zencastr"

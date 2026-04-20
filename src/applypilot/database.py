@@ -139,6 +139,7 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
 
     # Run migrations for any columns added after initial schema
     ensure_columns(conn)
+    ensure_indexes(conn)
 
     return conn
 
@@ -222,6 +223,43 @@ def ensure_columns(conn: sqlite3.Connection | None = None) -> list[str]:
         conn.commit()
 
     return added
+
+
+def ensure_indexes(conn: sqlite3.Connection | None = None) -> list[str]:
+    """Create indexes used by dashboard and stage-selection queries."""
+    if conn is None:
+        conn = get_connection()
+
+    indexes = {
+        "idx_jobs_site_strategy_last_seen": (
+            "CREATE INDEX IF NOT EXISTS idx_jobs_site_strategy_last_seen "
+            "ON jobs(site, strategy, last_seen_at)"
+        ),
+        "idx_jobs_score": (
+            "CREATE INDEX IF NOT EXISTS idx_jobs_score "
+            "ON jobs(fit_score)"
+        ),
+        "idx_jobs_apply_state": (
+            "CREATE INDEX IF NOT EXISTS idx_jobs_apply_state "
+            "ON jobs(applied_at, apply_status)"
+        ),
+        "idx_jobs_posted_discovered": (
+            "CREATE INDEX IF NOT EXISTS idx_jobs_posted_discovered "
+            "ON jobs(posted_at, discovered_at)"
+        ),
+    }
+
+    created: list[str] = []
+    before = {
+        row[1]
+        for row in conn.execute("PRAGMA index_list(jobs)").fetchall()
+    }
+    for name, statement in indexes.items():
+        conn.execute(statement)
+        if name not in before:
+            created.append(name)
+    conn.commit()
+    return created
 
 
 def get_stats(conn: sqlite3.Connection | None = None) -> dict:

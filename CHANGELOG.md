@@ -5,6 +5,14 @@ All notable changes to ApplyPilot will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Official public ATS discovery adapters for Ashby, Recruitee, Workable, and SmartRecruiters.
+- Seeded the new ATS registries with verified public employer boards.
+- Official custom careers discovery for Amazon Jobs, Apple Careers, Google Careers, and Uber Careers, including the Uber job-search RPC that captures job `157476`.
+- AcademicJobsOnline Physics discovery plus a physics-postdoc search preset.
+
 ## [0.2.0] - 2026-02-17
 
 ### Added

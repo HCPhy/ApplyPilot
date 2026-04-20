@@ -1,0 +1,40 @@
+# Curated SmartRecruiters company registry for ApplyPilot.
+# The company_identifier is the final path segment from
+# https://careers.smartrecruiters.com/<company_identifier>.
+
+boards:
+  believe:
+    name: "Believe"
+    company_identifier: "Believe"
+
+  canva:
+    name: "Canva"
+    company_identifier: "Canva"
+
+  dragonboat:
+    name: "Dragonboat"
+    company_identifier: "DragonboatInc"
+
+  expert_institute:
+    name: "Expert Institute"
+    company_identifier: "ExpertInstitute"
+
+  hirevue:
+    name: "HireVue"
+    company_identifier: "HireVue"
+
+  insightsoftware:
+    name: "insightsoftware"
+    company_identifier: "Insightsoftware"
+
+  revalize:
+    name: "Revalize"
+    company_identifier: "Revalize"
+
+  smartrecruiters:
+    name: "SmartRecruiters"
+    company_identifier: "smartrecruiters"
+
+  tap:
+    name: "Tap"
+    company_identifier: "Tap1"

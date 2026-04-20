@@ -1,0 +1,40 @@
+# Oracle Cloud Recruiting Candidate Experience boards.
+# These use public hcmRestApi endpoints behind branded career sites.
+
+boards:
+  goldman_sachs:
+    name: "Goldman Sachs"
+    api_base_url: "https://hdpc.fa.us2.oraclecloud.com"
+    ui_base_url: "https://hdpc.fa.us2.oraclecloud.com"
+    site_number: "LateralHiring"
+    site_path: "LateralHiring"
+    public_role_base_url: "https://higher.gs.com/roles"
+    default_queries:
+      - query: "quantitative"
+        tier: 1
+      - query: "quant"
+        tier: 1
+      - query: "strats"
+        tier: 2
+      - query: "strategist"
+        tier: 2
+      - query: "trading"
+        tier: 3
+
+  jpmorgan_chase:
+    name: "JPMorgan Chase"
+    api_base_url: "https://jpmc.fa.oraclecloud.com"
+    ui_base_url: "https://jpmc.fa.oraclecloud.com"
+    site_number: "CX_1001"
+    site_path: "CX_1001"
+    default_queries:
+      - query: "quantitative"
+        tier: 1
+      - query: "quant"
+        tier: 1
+      - query: "strats"
+        tier: 2
+      - query: "strategist"
+        tier: 2
+      - query: "trading"
+        tier: 3
