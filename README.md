@@ -67,7 +67,8 @@ applypilot doctor
 | LLM provider | `score`, `tailor`, `cover` | Gemini, OpenAI, or a local OpenAI-compatible endpoint |
 | Chrome or Chromium | `apply` | Browser automation target |
 | Node.js 18+ | `apply` | Needed so `npx` can launch Playwright MCP |
-| Claude Code CLI | `apply` | Auto-apply agent runtime |
+| Claude Code CLI | `apply --agent claude` | Default auto-apply agent runtime |
+| OpenAI API key | `apply --agent openai` | Experimental computer-use auto-apply runtime |
 | CapSolver API key | Optional | Only for CAPTCHA-heavy application flows |
 
 ## Recommended Workflows
@@ -247,7 +248,7 @@ This controls runtime credentials and model selection, for example:
 | `tailor` | Generates a resume tailored to the job |
 | `cover` | Generates a cover letter |
 | `pdf` | Converts generated assets to PDF |
-| `apply` | Uses Claude Code plus browser automation to submit applications |
+| `apply` | Uses Claude Code or OpenAI computer-use plus browser automation to submit applications |
 
 Each stage can be run independently.
 
@@ -306,12 +307,14 @@ Important nuance:
 
 ## Auto-Apply Notes
 
-`applypilot apply` uses Claude Code plus a Playwright MCP browser toolchain.
+`applypilot apply` defaults to Claude Code plus a Playwright MCP browser toolchain.
+It can also run an experimental OpenAI computer-use backend.
 
 Useful modes:
 
 ```bash
 applypilot apply --dry-run
+applypilot apply --agent openai --model computer-use-preview --dry-run
 applypilot apply --use-base-resume
 applypilot apply --url "JOB_URL"
 applypilot apply --limit 1
@@ -323,6 +326,10 @@ applypilot apply --reset-failed
 Important limitations:
 
 - normal `apply` mode is autonomous
+- `--agent openai` uses OpenAI's computer-use Responses API and requires `OPENAI_API_KEY`
+- `--agent openai` currently runs one worker at a time
+- the OpenAI backend does not read Gmail yet, so email verification stops as `login_issue`
+- OpenAI safety checks stop the run instead of being auto-acknowledged
 - there is no built-in "pause before final submit" approval step
 - if you want human review, use `--dry-run` or target one URL at a time
 
@@ -337,6 +344,7 @@ applypilot run --stream
 applypilot run --validation normal
 applypilot rescore --min-score 7
 applypilot apply
+applypilot apply --agent openai --model computer-use-preview --dry-run
 applypilot apply --dry-run
 applypilot apply --use-base-resume
 applypilot apply --url URL

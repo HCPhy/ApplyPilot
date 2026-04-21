@@ -114,7 +114,7 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
                 FROM jobs
                 WHERE (url = ? OR application_url = ? OR application_url LIKE ? OR url LIKE ?)
                   {resume_gate}
-                  AND apply_status != 'in_progress'
+                  AND (apply_status IS NULL OR apply_status != 'in_progress')
                 LIMIT 1
             """, (target_url, target_url, like, like)).fetchone()
         else:
@@ -280,6 +280,39 @@ def gen_prompt(target_url: str, min_score: int = 7,
     return prompt_file
 
 
+def gen_openai_prompt(target_url: str, min_score: int = 7,
+                      worker_id: int = 0,
+                      use_base_resume: bool = False) -> Path | None:
+    """Generate an OpenAI computer-use prompt file for manual debugging."""
+    job = acquire_job(
+        target_url=target_url,
+        min_score=min_score,
+        worker_id=worker_id,
+        use_base_resume=use_base_resume,
+    )
+    if not job:
+        return None
+
+    resume_text, resume_pdf_path, resume_kind = _load_resume_assets(
+        job, use_base_resume=use_base_resume
+    )
+    bundle = prompt_mod.build_openai_computer_prompt(
+        job=job,
+        resume_text=resume_text,
+        resume_pdf_path=resume_pdf_path,
+        dry_run=True,
+        resume_kind=resume_kind,
+    )
+
+    release_lock(job["url"])
+
+    config.ensure_dirs()
+    site_slug = (job.get("site") or "unknown")[:20].replace(" ", "_")
+    prompt_file = config.LOG_DIR / f"openai_prompt_{site_slug}_{job['title'][:30].replace(' ', '_')}.txt"
+    prompt_file.write_text(bundle.prompt, encoding="utf-8")
+    return prompt_file
+
+
 def mark_job(url: str, status: str, reason: str | None = None) -> None:
     """Manually mark a job's apply status in the database.
 
@@ -326,6 +359,46 @@ def reset_failed() -> int:
 # ---------------------------------------------------------------------------
 # Per-job execution
 # ---------------------------------------------------------------------------
+
+def _parse_claude_apply_result(output: str) -> str | None:
+    """Parse Claude apply output into an ApplyPilot result string."""
+    normalized = output.lower()
+    if "credit balance is too low" in normalized:
+        return "failed:claude_credit_balance_low"
+    if "insufficient credit" in normalized or "insufficient credits" in normalized:
+        return "failed:claude_credit_balance_low"
+
+    for result_status in ["APPLIED", "EXPIRED", "CAPTCHA", "LOGIN_ISSUE"]:
+        if f"RESULT:{result_status}" in output:
+            return result_status.lower()
+
+    if "RESULT:FAILED" in output:
+        for out_line in output.split("\n"):
+            if "RESULT:FAILED" in out_line:
+                reason = (
+                    out_line.split("RESULT:FAILED:")[-1].strip()
+                    if ":" in out_line[out_line.index("FAILED") + 6:]
+                    else "unknown"
+                )
+                reason = re.sub(r'[*`"]+$', '', reason).strip()
+                if reason in {"captcha", "expired", "login_issue"}:
+                    return reason
+                return f"failed:{reason}"
+        return "failed:unknown"
+
+    return None
+
+
+def _is_agent_infra_failure(result: str) -> bool:
+    """Return True for failures caused by the apply agent runtime, not the job."""
+    reason = result.split(":", 1)[-1] if ":" in result else result
+    return reason in {
+        "claude_credit_balance_low",
+        "openai_computer_use_unavailable",
+        "deterministic_unsupported_platform",
+        "deterministic_missing_data",
+    }
+
 
 def run_job(job: dict, port: int, worker_id: int = 0,
             model: str = "sonnet", effort: str = "low",
@@ -499,36 +572,18 @@ def run_job(job: dict, port: int, worker_id: int = 0,
             prev_cost = ws.total_cost if ws else 0.0
             update_state(worker_id, last_job_cost=cost, total_cost=prev_cost + cost)
 
-        def _clean_reason(s: str) -> str:
-            return re.sub(r'[*`"]+$', '', s).strip()
-
-        for result_status in ["APPLIED", "EXPIRED", "CAPTCHA", "LOGIN_ISSUE"]:
-            if f"RESULT:{result_status}" in output:
-                add_event(f"[W{worker_id}] {result_status} ({elapsed}s): {job['title'][:30]}")
-                update_state(worker_id, status=result_status.lower(),
-                             last_action=f"{result_status} ({elapsed}s)")
-                return result_status.lower(), duration_ms
-
-        if "RESULT:FAILED" in output:
-            for out_line in output.split("\n"):
-                if "RESULT:FAILED" in out_line:
-                    reason = (
-                        out_line.split("RESULT:FAILED:")[-1].strip()
-                        if ":" in out_line[out_line.index("FAILED") + 6:]
-                        else "unknown"
-                    )
-                    reason = _clean_reason(reason)
-                    PROMOTE_TO_STATUS = {"captcha", "expired", "login_issue"}
-                    if reason in PROMOTE_TO_STATUS:
-                        add_event(f"[W{worker_id}] {reason.upper()} ({elapsed}s): {job['title'][:30]}")
-                        update_state(worker_id, status=reason,
-                                     last_action=f"{reason.upper()} ({elapsed}s)")
-                        return reason, duration_ms
-                    add_event(f"[W{worker_id}] FAILED ({elapsed}s): {reason[:30]}")
-                    update_state(worker_id, status="failed",
-                                 last_action=f"FAILED: {reason[:25]}")
-                    return f"failed:{reason}", duration_ms
-            return "failed:unknown", duration_ms
+        parsed_result = _parse_claude_apply_result(output)
+        if parsed_result:
+            status_label = parsed_result.split(":", 1)[-1].upper()
+            if parsed_result.startswith("failed:"):
+                add_event(f"[W{worker_id}] FAILED ({elapsed}s): {status_label[:30]}")
+                update_state(worker_id, status="failed",
+                             last_action=f"FAILED: {status_label[:25]}")
+            else:
+                add_event(f"[W{worker_id}] {status_label} ({elapsed}s): {job['title'][:30]}")
+                update_state(worker_id, status=parsed_result,
+                             last_action=f"{status_label} ({elapsed}s)")
+            return parsed_result, duration_ms
 
         add_event(f"[W{worker_id}] NO RESULT ({elapsed}s)")
         update_state(worker_id, status="failed", last_action=f"no result ({elapsed}s)")
@@ -550,6 +605,49 @@ def run_job(job: dict, port: int, worker_id: int = 0,
             _claude_procs.pop(worker_id, None)
         if proc is not None and proc.poll() is None:
             _kill_process_tree(proc.pid)
+
+
+def run_job_openai(job: dict, port: int, worker_id: int = 0,
+                   model: str = "computer-use-preview",
+                   dry_run: bool = False,
+                   use_base_resume: bool = False) -> tuple[str, int]:
+    """Run one job application with OpenAI computer-use."""
+    from applypilot.apply.openai_runner import run_openai_computer_apply
+
+    resume_text, resume_pdf_path, resume_kind = _load_resume_assets(
+        job, use_base_resume=use_base_resume
+    )
+    bundle = prompt_mod.build_openai_computer_prompt(
+        job=job,
+        resume_text=resume_text,
+        resume_pdf_path=resume_pdf_path,
+        dry_run=dry_run,
+        resume_kind=resume_kind,
+    )
+    return run_openai_computer_apply(
+        job=job,
+        port=port,
+        worker_id=worker_id,
+        model=model,
+        prompt=bundle.prompt,
+        resume_pdf_path=bundle.resume_pdf_path,
+        cover_letter_pdf_path=bundle.cover_letter_pdf_path,
+    )
+
+
+def run_job_deterministic(job: dict, port: int, worker_id: int = 0,
+                          dry_run: bool = False,
+                          use_base_resume: bool = False) -> tuple[str, int]:
+    """Run one job application with deterministic DOM automation."""
+    from applypilot.apply.deterministic import run_deterministic_apply
+
+    return run_deterministic_apply(
+        job=job,
+        port=port,
+        worker_id=worker_id,
+        dry_run=dry_run,
+        use_base_resume=use_base_resume,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +685,8 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
                 min_score: int = 7, headless: bool = False,
                 model: str = "sonnet", effort: str = "low",
                 max_budget_usd: float | None = None, dry_run: bool = False,
-                use_base_resume: bool = False) -> tuple[int, int]:
+                use_base_resume: bool = False,
+                agent: str = "claude") -> tuple[int, int]:
     """Run jobs sequentially until limit is reached or queue is empty.
 
     Args:
@@ -596,11 +695,12 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
         target_url: Apply to a specific URL.
         min_score: Minimum fit_score threshold.
         headless: Run Chrome headless.
-        model: Claude model name.
+        model: Agent model name.
         effort: Claude reasoning effort for this run.
         max_budget_usd: Optional per-job Claude cost cap.
         dry_run: Don't click Submit.
         use_base_resume: Apply with the master resume instead of a tailored one.
+        agent: Apply runtime, "claude" or "openai".
 
     Returns:
         Tuple of (applied_count, failed_count).
@@ -643,21 +743,61 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
             add_event(f"[W{worker_id}] Launching Chrome...")
             chrome_proc = launch_chrome(worker_id, port=port, headless=headless)
 
-            result, duration_ms = run_job(
-                job,
-                port=port,
-                worker_id=worker_id,
-                model=model,
-                effort=effort,
-                max_budget_usd=max_budget_usd,
-                dry_run=dry_run,
-                use_base_resume=use_base_resume,
-            )
+            if agent == "openai":
+                result, duration_ms = run_job_openai(
+                    job,
+                    port=port,
+                    worker_id=worker_id,
+                    model=model,
+                    dry_run=dry_run,
+                    use_base_resume=use_base_resume,
+                )
+            elif agent == "deterministic":
+                result, duration_ms = run_job_deterministic(
+                    job,
+                    port=port,
+                    worker_id=worker_id,
+                    dry_run=dry_run,
+                    use_base_resume=use_base_resume,
+                )
+            else:
+                result, duration_ms = run_job(
+                    job,
+                    port=port,
+                    worker_id=worker_id,
+                    model=model,
+                    effort=effort,
+                    max_budget_usd=max_budget_usd,
+                    dry_run=dry_run,
+                    use_base_resume=use_base_resume,
+                )
 
             if result == "skipped":
                 release_lock(job["url"])
                 add_event(f"[W{worker_id}] Skipped: {job['title'][:30]}")
                 continue
+            elif _is_agent_infra_failure(result):
+                release_lock(job["url"])
+                reason = result.split(":", 1)[-1] if ":" in result else result
+                add_event(f"[W{worker_id}] Agent blocked: {reason}")
+                failed += 1
+                update_state(worker_id, jobs_failed=failed,
+                             jobs_done=applied + failed,
+                             status="failed",
+                             last_action=reason[:35])
+                break
+            elif dry_run:
+                release_lock(job["url"])
+                add_event(f"[W{worker_id}] Dry run result: {result} ({job['title'][:30]})")
+                update_state(worker_id, status="done", last_action=f"dry-run {result}"[:35])
+                if result == "applied":
+                    applied += 1
+                    update_state(worker_id, jobs_applied=applied,
+                                 jobs_done=applied + failed)
+                else:
+                    failed += 1
+                    update_state(worker_id, jobs_failed=failed,
+                                 jobs_done=applied + failed)
             elif result == "applied":
                 mark_result(job["url"], "applied", duration_ms=duration_ms)
                 applied += 1
@@ -705,7 +845,8 @@ def main(limit: int = 1, target_url: str | None = None,
          effort: str = "low", max_budget_usd: float | None = None,
          dry_run: bool = False, continuous: bool = False,
          poll_interval: int = 60, workers: int = 1,
-         use_base_resume: bool = False) -> None:
+         use_base_resume: bool = False,
+         agent: str = "claude") -> None:
     """Launch the apply pipeline.
 
     Args:
@@ -713,7 +854,7 @@ def main(limit: int = 1, target_url: str | None = None,
         target_url: Apply to a specific URL.
         min_score: Minimum fit_score threshold.
         headless: Run Chrome in headless mode.
-        model: Claude model name.
+        model: Agent model name.
         effort: Claude reasoning effort for this run.
         max_budget_usd: Optional per-job Claude cost cap.
         dry_run: Don't click Submit.
@@ -721,6 +862,7 @@ def main(limit: int = 1, target_url: str | None = None,
         poll_interval: Seconds between DB polls when queue is empty.
         workers: Number of parallel workers (default 1).
         use_base_resume: Apply with the master resume instead of a tailored one.
+        agent: Apply runtime, "claude" or "openai".
     """
     global POLL_INTERVAL
     POLL_INTERVAL = poll_interval
@@ -741,7 +883,10 @@ def main(limit: int = 1, target_url: str | None = None,
         init_worker(i)
 
     worker_label = f"{workers} worker{'s' if workers > 1 else ''}"
-    console.print(f"Launching apply pipeline ({mode_label}, {worker_label}, poll every {POLL_INTERVAL}s)...")
+    console.print(
+        f"Launching apply pipeline ({mode_label}, {worker_label}, "
+        f"{agent} agent, poll every {POLL_INTERVAL}s)..."
+    )
     console.print("[dim]Ctrl+C = skip current job(s) | Ctrl+C x2 = stop[/dim]")
 
     # Double Ctrl+C handler
@@ -795,6 +940,7 @@ def main(limit: int = 1, target_url: str | None = None,
                     max_budget_usd=max_budget_usd,
                     dry_run=dry_run,
                     use_base_resume=use_base_resume,
+                    agent=agent,
                 )
             else:
                 # Multi-worker — distribute limit across workers
@@ -821,6 +967,7 @@ def main(limit: int = 1, target_url: str | None = None,
                             max_budget_usd=max_budget_usd,
                             dry_run=dry_run,
                             use_base_resume=use_base_resume,
+                            agent=agent,
                         ): i
                         for i in range(workers)
                     }
@@ -842,10 +989,16 @@ def main(limit: int = 1, target_url: str | None = None,
             live.update(render_full())
 
         totals = get_totals()
-        console.print(
-            f"\n[bold]Done: {total_applied} applied, {total_failed} failed "
-            f"(${totals['cost']:.3f})[/bold]"
-        )
+        if dry_run:
+            console.print(
+                f"\n[bold]Done dry-run: {total_applied} ready, {total_failed} blocked "
+                f"(${totals['cost']:.3f})[/bold]"
+            )
+        else:
+            console.print(
+                f"\n[bold]Done: {total_applied} applied, {total_failed} failed "
+                f"(${totals['cost']:.3f})[/bold]"
+            )
         console.print(f"Logs: {config.LOG_DIR}")
 
     except KeyboardInterrupt:

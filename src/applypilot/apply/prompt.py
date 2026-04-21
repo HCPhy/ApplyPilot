@@ -8,6 +8,7 @@ personal data is loaded from the user's profile -- nothing is hardcoded.
 import logging
 import os
 import shutil
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -15,6 +16,15 @@ from applypilot import config
 from applypilot.discovery.location_filters import US_WIDE_SENTINEL, normalize_location_preferences
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class OpenAIApplyPrompt:
+    """Prompt plus local files the computer-use harness can upload."""
+
+    prompt: str
+    resume_pdf_path: str
+    cover_letter_pdf_path: str | None = None
 
 
 def _get_relocation_scope(profile: dict) -> str:
@@ -707,3 +717,173 @@ RESULT:FAILED:reason -- any other failure (brief reason)
 Stop immediately. Output your RESULT code. Do not loop."""
 
     return prompt
+
+
+def build_openai_computer_prompt(
+    job: dict,
+    resume_text: str,
+    resume_pdf_path: str | Path | None = None,
+    cover_letter: str | None = None,
+    dry_run: bool = False,
+    resume_kind: str = "tailored",
+) -> OpenAIApplyPrompt:
+    """Build instructions for OpenAI's computer-use apply backend.
+
+    Unlike the Claude prompt, this prompt must not reference Playwright MCP
+    tool names. The OpenAI backend receives screenshots and returns low-level
+    computer actions such as click, type, keypress, and scroll.
+    """
+    profile = config.load_profile()
+    search_config = config.load_search_config()
+    personal = profile["personal"]
+
+    resolved_resume_pdf = Path(resume_pdf_path).resolve() if resume_pdf_path else None
+    if resolved_resume_pdf is None:
+        resume_path = job.get("tailored_resume_path")
+        if not resume_path:
+            raise ValueError(f"No resume available for job: {job.get('title', 'unknown')}")
+        resolved_resume_pdf = Path(resume_path).with_suffix(".pdf").resolve()
+    if not resolved_resume_pdf.exists():
+        raise ValueError(f"Resume PDF not found: {resolved_resume_pdf}")
+
+    full_name = personal["full_name"]
+    name_slug = full_name.replace(" ", "_")
+    dest_dir = config.APPLY_WORKER_DIR / "current"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    upload_pdf = dest_dir / f"{name_slug}_Resume.pdf"
+    shutil.copy(str(resolved_resume_pdf), str(upload_pdf))
+
+    cover_letter_text = cover_letter or ""
+    cover_letter_pdf_path: str | None = None
+    cl_path = job.get("cover_letter_path")
+    if cl_path and Path(cl_path).exists():
+        cl_src = Path(cl_path)
+        cl_txt = cl_src.with_suffix(".txt")
+        if cl_txt.exists():
+            cover_letter_text = cl_txt.read_text(encoding="utf-8")
+        elif cl_src.suffix == ".txt":
+            cover_letter_text = cl_src.read_text(encoding="utf-8")
+
+        cl_pdf_src = cl_src.with_suffix(".pdf")
+        if cl_pdf_src.exists():
+            cl_upload = dest_dir / f"{name_slug}_Cover_Letter.pdf"
+            shutil.copy(str(cl_pdf_src), str(cl_upload))
+            cover_letter_pdf_path = str(cl_upload)
+
+    city = personal.get("city", "the area")
+    if not cover_letter_text:
+        cover_letter_text = (
+            f"No cover letter is available. Skip if optional. If required, write 2 factual "
+            f"sentences: (1) relevant experience from the resume that matches this role, "
+            f"(2) available immediately and based in {city}."
+        )
+
+    profile_summary = _build_profile_summary(profile)
+    location_check = _build_location_check(profile, search_config)
+    salary_section = _build_salary_section(profile)
+    screening_section = _build_screening_section(profile)
+    hard_rules = _build_hard_rules(profile)
+    phone_digits = "".join(c for c in personal.get("phone", "") if c.isdigit())
+
+    from applypilot.config import load_blocked_sso
+    blocked_sso = load_blocked_sso()
+
+    resume_label = "TAILORED RESUME" if resume_kind == "tailored" else "BASE RESUME"
+    if dry_run:
+        submit_instruction = (
+            "Do NOT click the final Submit/Apply button. Stop at the final review page "
+            "after checking the filled fields, then output RESULT:APPLIED."
+        )
+    else:
+        submit_instruction = (
+            f"Before clicking the final Submit/Apply button, review every visible field. "
+            f"Verify name, email, phone, location, work authorization, and {resume_label}. "
+            "Only submit after the data is correct."
+        )
+
+    prompt = f"""You are controlling a browser visually through screenshots and low-level computer actions. The browser is already open to the job application URL.
+
+== JOB ==
+URL: {job.get('application_url') or job['url']}
+Title: {job['title']}
+Company: {job.get('site', 'Unknown')}
+Fit Score: {job.get('fit_score', 'N/A')}/10
+
+== FILES ==
+Resume PDF: {upload_pdf}
+Cover Letter PDF: {cover_letter_pdf_path or "N/A"}
+Resume Source: {resume_kind}
+
+When a file chooser appears, the harness will attach the resume PDF automatically. Prefer pasting the cover letter text into text fields. Only use a cover-letter file upload if the form explicitly requires a file.
+
+== RESUME TEXT ==
+{resume_text}
+
+== COVER LETTER TEXT ==
+{cover_letter_text}
+
+== APPLICANT PROFILE ==
+{profile_summary}
+
+== MISSION ==
+Submit a complete, accurate application using only the facts above.
+Move efficiently: click, type, scroll, and use keyboard shortcuts when helpful. If a field is already correct, leave it alone.
+
+{hard_rules}
+
+== NEVER DO THESE ==
+- Never grant camera, microphone, screen sharing, location, or notification permissions.
+- Never do video/audio verification, selfie capture, ID photo upload, biometric checks, or assessment software.
+- Never enter payment info, bank details, SSN, or SIN.
+- Never install extensions, download executables, or run external software.
+- Never apply to contractor marketplaces or talent-network-only forms.
+
+{location_check}
+
+{salary_section}
+
+{screening_section}
+
+== LOGIN / VERIFICATION ==
+- If the page requires Google, Microsoft, SSO, OAuth, or any blocked identity provider ({', '.join(blocked_sso)}), stop and output RESULT:FAILED:sso_required.
+- If the employer has its own login form, try the applicant email and saved password from the profile if present.
+- If email verification is required, stop and output RESULT:FAILED:login_issue. This OpenAI backend does not read Gmail yet.
+- If a CAPTCHA blocks progress, stop and output RESULT:CAPTCHA.
+
+== APPLICATION FLOW ==
+1. Read the page. If the job is closed or no longer accepting applications, output RESULT:EXPIRED.
+2. Check location eligibility early. If not eligible, output RESULT:FAILED:not_eligible_location.
+3. Find the Apply button and continue to the application form.
+4. Upload the resume where requested. The harness handles the actual file attachment after you click the upload control.
+5. Fill missing fields from APPLICANT PROFILE and RESUME TEXT.
+6. Answer screening questions honestly using the screening rules.
+7. Phone fields with country prefix: type digits only when needed: {phone_digits}
+8. Date fields: use {datetime.now().strftime('%m/%d/%Y')} if today's date is requested.
+9. {submit_instruction}
+10. After submit, look for confirmation text like thank you, application received, submitted, or confirmation number.
+
+== RESULT CODES ==
+Your final message must be exactly one plain-text RESULT line and nothing else.
+RESULT:APPLIED
+RESULT:EXPIRED
+RESULT:CAPTCHA
+RESULT:LOGIN_ISSUE
+RESULT:FAILED:not_eligible_location
+RESULT:FAILED:not_eligible_work_auth
+RESULT:FAILED:sso_required
+RESULT:FAILED:page_error
+RESULT:FAILED:stuck
+RESULT:FAILED:reason
+
+== GIVE UP RULES ==
+- Same page after 3 attempts with no progress -> RESULT:FAILED:stuck
+- Broken, blank, 500, or unreachable page -> RESULT:FAILED:page_error
+- Email-only application -> RESULT:FAILED:email_only
+- Unsure whether clicking final submit is safe -> RESULT:FAILED:needs_human_review
+"""
+
+    return OpenAIApplyPrompt(
+        prompt=prompt,
+        resume_pdf_path=str(upload_pdf),
+        cover_letter_pdf_path=cover_letter_pdf_path,
+    )

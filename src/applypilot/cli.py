@@ -227,7 +227,13 @@ def apply(
     limit: Optional[int] = typer.Option(None, "--limit", "-l", help="Max applications to submit."),
     workers: int = typer.Option(1, "--workers", "-w", help="Number of parallel browser workers."),
     min_score: int = typer.Option(7, "--min-score", help="Minimum fit score for job selection."),
-    model: str = typer.Option("haiku", "--model", "-m", help="Claude model name."),
+    agent: str = typer.Option("claude", "--agent", help="Apply runtime: claude, openai, or deterministic."),
+    model: str = typer.Option(
+        "haiku",
+        "--model",
+        "-m",
+        help="Agent model name. Defaults to haiku for Claude and computer-use-preview for OpenAI.",
+    ),
     effort: str = typer.Option("low", "--effort", help="Claude reasoning effort: low, medium, high, or max."),
     max_budget_usd: Optional[float] = typer.Option(None, "--max-budget-usd", help="Hard per-job Claude budget cap in USD."),
     continuous: bool = typer.Option(False, "--continuous", "-c", help="Run forever, polling for new jobs."),
@@ -250,11 +256,34 @@ def apply(
 
     from applypilot.config import (
         check_tier,
+        get_chrome_path,
         PROFILE_PATH as _profile_path,
         RESUME_PATH as _resume_path,
         RESUME_PDF_PATH as _resume_pdf_path,
     )
     from applypilot.database import get_connection
+    import os
+
+    agent = agent.lower().strip()
+    valid_agents = {"claude", "openai", "deterministic"}
+    if agent not in valid_agents:
+        console.print(
+            f"[red]Invalid --agent value:[/red] '{agent}'. "
+            f"Choose from: {', '.join(sorted(valid_agents))}"
+        )
+        raise typer.Exit(code=1)
+
+    if agent == "openai" and model == "haiku":
+        model = "computer-use-preview"
+    if agent == "openai" and workers != 1:
+        console.print("[yellow]--agent openai currently supports one worker; using --workers 1.[/yellow]")
+        workers = 1
+    if agent == "openai" and max_budget_usd is not None:
+        console.print("[yellow]--max-budget-usd is only enforced by Claude Code; ignoring it for --agent openai.[/yellow]")
+    if agent == "deterministic" and max_budget_usd is not None:
+        console.print("[yellow]--max-budget-usd does not apply to --agent deterministic.[/yellow]")
+    if agent == "deterministic" and model != "haiku":
+        console.print("[yellow]--model is ignored for --agent deterministic.[/yellow]")
 
     # --- Utility modes (no Chrome/Claude needed) ---
 
@@ -278,8 +307,34 @@ def apply(
 
     # --- Full apply mode ---
 
-    # Check 1: Tier 3 required (Claude Code CLI + Chrome)
-    check_tier(3, "auto-apply")
+    # Check 1: apply runtime requirements
+    if agent == "claude":
+        check_tier(3, "auto-apply")
+    elif agent == "openai":
+        check_tier(2, "OpenAI auto-apply")
+        if not os.environ.get("OPENAI_API_KEY"):
+            console.print("[red]OPENAI_API_KEY is required for --agent openai.[/red]")
+            raise typer.Exit(code=1)
+        from applypilot.apply.openai_runner import check_openai_computer_use_access
+        ok, reason = check_openai_computer_use_access(model)
+        if not ok:
+            console.print(f"[red]{reason}[/red]")
+            console.print(
+                "[dim]Use Claude for apply for now, or switch to an OpenAI API org "
+                "with computer-use-preview access.[/dim]"
+            )
+            raise typer.Exit(code=1)
+        try:
+            get_chrome_path()
+        except FileNotFoundError:
+            console.print("[red]Chrome/Chromium is required for --agent openai.[/red]")
+            raise typer.Exit(code=1)
+    else:
+        try:
+            get_chrome_path()
+        except FileNotFoundError:
+            console.print("[red]Chrome/Chromium is required for --agent deterministic.[/red]")
+            raise typer.Exit(code=1)
 
     # Check 2: Profile exists
     if not _profile_path.exists():
@@ -329,28 +384,40 @@ def apply(
             raise typer.Exit(code=1)
 
     if gen:
-        from applypilot.apply.launcher import gen_prompt, BASE_CDP_PORT
+        from applypilot.apply.launcher import gen_openai_prompt, gen_prompt, BASE_CDP_PORT
         target = url or ""
         if not target:
             console.print("[red]--gen requires --url to specify which job.[/red]")
             raise typer.Exit(code=1)
-        prompt_file = gen_prompt(
-            target,
-            min_score=min_score,
-            model=model,
-            use_base_resume=use_base_resume,
-        )
+        if agent == "openai":
+            prompt_file = gen_openai_prompt(
+                target,
+                min_score=min_score,
+                use_base_resume=use_base_resume,
+            )
+        else:
+            prompt_file = gen_prompt(
+                target,
+                min_score=min_score,
+                model=model,
+                use_base_resume=use_base_resume,
+            )
         if not prompt_file:
             console.print("[red]No matching job found for that URL.[/red]")
             raise typer.Exit(code=1)
-        mcp_path = _profile_path.parent / ".mcp-apply-0.json"
         console.print(f"[green]Wrote prompt to:[/green] {prompt_file}")
-        console.print(f"\n[bold]Run manually:[/bold]")
-        console.print(
-            f"  claude --model {model} -p "
-            f"--mcp-config {mcp_path} "
-            f"--permission-mode bypassPermissions < {prompt_file}"
-        )
+        if agent == "claude":
+            mcp_path = _profile_path.parent / ".mcp-apply-0.json"
+            console.print(f"\n[bold]Run manually:[/bold]")
+            console.print(
+                f"  claude --model {model} -p "
+                f"--mcp-config {mcp_path} "
+                f"--permission-mode bypassPermissions < {prompt_file}"
+            )
+        elif agent == "openai":
+            console.print("[dim]OpenAI computer-use prompts run through applypilot apply --agent openai.[/dim]")
+        else:
+            console.print("[dim]Deterministic apply runs directly in applypilot; there is no agent prompt file to run manually.[/dim]")
         return
 
     from applypilot.apply.launcher import main as apply_main
@@ -360,8 +427,10 @@ def apply(
     console.print("\n[bold blue]Launching Auto-Apply[/bold blue]")
     console.print(f"  Limit:    {'unlimited' if continuous else effective_limit}")
     console.print(f"  Workers:  {workers}")
+    console.print(f"  Agent:    {agent}")
     console.print(f"  Model:    {model}")
-    console.print(f"  Effort:   {effort}")
+    if agent == "claude":
+        console.print(f"  Effort:   {effort}")
     console.print(f"  Headless: {headless}")
     console.print(f"  Dry run:  {dry_run}")
     console.print(f"  Resume:   {'base' if use_base_resume else 'tailored'}")
@@ -383,6 +452,7 @@ def apply(
         continuous=continuous,
         workers=workers,
         use_base_resume=use_base_resume,
+        agent=agent,
     )
 
 
@@ -541,7 +611,7 @@ def doctor() -> None:
         results.append(("Claude Code CLI", ok_mark, claude_bin))
     else:
         results.append(("Claude Code CLI", fail_mark,
-                        "Install from https://claude.ai/code (needed for auto-apply)"))
+                        "Install from https://claude.ai/code (needed for apply --agent claude)"))
 
     # Chrome
     try:
@@ -585,9 +655,9 @@ def doctor() -> None:
 
     if tier == 1:
         console.print("[dim]  → Tier 2 unlocks: scoring, tailoring, cover letters (needs LLM API key)[/dim]")
-        console.print("[dim]  → Tier 3 unlocks: auto-apply (needs Claude Code CLI + Chrome + Node.js)[/dim]")
+        console.print("[dim]  → OpenAI apply needs OPENAI_API_KEY + Chrome; Claude apply needs Claude Code CLI + Chrome + Node.js[/dim]")
     elif tier == 2:
-        console.print("[dim]  → Tier 3 unlocks: auto-apply (needs Claude Code CLI + Chrome + Node.js)[/dim]")
+        console.print("[dim]  → apply --agent openai works with OPENAI_API_KEY + Chrome; apply --agent claude needs Claude Code CLI + Node.js[/dim]")
 
     console.print()
 
