@@ -280,14 +280,15 @@ The dashboard in this fork is meant for firm-by-firm triage, not just a flat lis
 It currently supports:
 
 - newest-first ranking using ATS posted/updated dates when available
+- `All`, `Todo`, and `Applied` views inside one dashboard
 - firm filtering
 - score filtering
 - sort switching between newest-first, highest-score, and firm A-Z
 - 100-job pagination so large crawls do not render thousands of cards at once
 - text search
 - unscored jobs, so fresh crawls are visible before LLM scoring
-- applied, applying, and failed badges from the DB
-- manual "marked applied" badges after confirming from the Apply link
+- applied, applying, failed, and todo badges
+- DB-backed `Todo` and `Applied` updates in interactive mode
 - remembered clicked jobs in the browser
 
 Open it with:
@@ -300,8 +301,8 @@ applypilot dashboard --no-open
 
 Important nuance:
 
-- apply state is persistent because it comes from SQLite
-- clicked/viewed state and manual "marked applied" state are browser-local because they are stored in `localStorage`
+- `applypilot dashboard` now opens a small localhost dashboard server so `Todo` and `Applied` changes persist in SQLite
+- `applypilot dashboard --no-open` still writes a static HTML snapshot; in snapshot mode only viewed state stays browser-local and there is no SQLite write-back
 - the HTML intentionally embeds only description previews and renders one page of cards at a time, so large crawls stay responsive
 - use `--max-jobs` for a lighter triage file when the database gets large
 

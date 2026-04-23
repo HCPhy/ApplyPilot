@@ -12,6 +12,8 @@ def test_parse_claude_result_extracts_failed_reason():
 
 def test_agent_infra_failure_is_not_job_specific():
     assert launcher._is_agent_infra_failure("failed:claude_credit_balance_low")
+    assert launcher._is_agent_infra_failure("failed:workday_missing_password")
+    assert launcher._is_agent_infra_failure("failed:workday_dry_run_needs_account")
     assert not launcher._is_agent_infra_failure("failed:sso_required")
 
 

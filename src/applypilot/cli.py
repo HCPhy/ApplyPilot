@@ -244,6 +244,11 @@ def apply(
         help="Apply using your master resume instead of requiring tailored resumes.",
     ),
     headless: bool = typer.Option(False, "--headless", help="Run browsers in headless mode."),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        help="Show step-level browser progress for deterministic apply and keep the browser visible.",
+    ),
     url: Optional[str] = typer.Option(None, "--url", help="Apply to a specific job URL."),
     gen: bool = typer.Option(False, "--gen", help="Generate prompt file for manual debugging instead of running."),
     mark_applied: Optional[str] = typer.Option(None, "--mark-applied", help="Manually mark a job URL as applied."),
@@ -284,6 +289,11 @@ def apply(
         console.print("[yellow]--max-budget-usd does not apply to --agent deterministic.[/yellow]")
     if agent == "deterministic" and model != "haiku":
         console.print("[yellow]--model is ignored for --agent deterministic.[/yellow]")
+    if verbose and headless:
+        console.print("[yellow]--verbose requires a visible browser; ignoring --headless.[/yellow]")
+        headless = False
+    if verbose and workers > 1:
+        console.print("[yellow]--verbose with multiple workers opens multiple browser windows.[/yellow]")
 
     # --- Utility modes (no Chrome/Claude needed) ---
 
@@ -432,6 +442,7 @@ def apply(
     if agent == "claude":
         console.print(f"  Effort:   {effort}")
     console.print(f"  Headless: {headless}")
+    console.print(f"  Verbose:  {verbose}")
     console.print(f"  Dry run:  {dry_run}")
     console.print(f"  Resume:   {'base' if use_base_resume else 'tailored'}")
     if max_budget_usd is not None:
@@ -453,6 +464,7 @@ def apply(
         workers=workers,
         use_base_resume=use_base_resume,
         agent=agent,
+        verbose=verbose,
     )
 
 

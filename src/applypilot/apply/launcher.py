@@ -397,6 +397,9 @@ def _is_agent_infra_failure(result: str) -> bool:
         "openai_computer_use_unavailable",
         "deterministic_unsupported_platform",
         "deterministic_missing_data",
+        "workday_missing_password",
+        "workday_dry_run_needs_account",
+        "workday_navigation_stalled",
     }
 
 
@@ -637,7 +640,8 @@ def run_job_openai(job: dict, port: int, worker_id: int = 0,
 
 def run_job_deterministic(job: dict, port: int, worker_id: int = 0,
                           dry_run: bool = False,
-                          use_base_resume: bool = False) -> tuple[str, int]:
+                          use_base_resume: bool = False,
+                          verbose: bool = False) -> tuple[str, int]:
     """Run one job application with deterministic DOM automation."""
     from applypilot.apply.deterministic import run_deterministic_apply
 
@@ -647,6 +651,7 @@ def run_job_deterministic(job: dict, port: int, worker_id: int = 0,
         worker_id=worker_id,
         dry_run=dry_run,
         use_base_resume=use_base_resume,
+        verbose=verbose,
     )
 
 
@@ -686,7 +691,8 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
                 model: str = "sonnet", effort: str = "low",
                 max_budget_usd: float | None = None, dry_run: bool = False,
                 use_base_resume: bool = False,
-                agent: str = "claude") -> tuple[int, int]:
+                agent: str = "claude",
+                verbose: bool = False) -> tuple[int, int]:
     """Run jobs sequentially until limit is reached or queue is empty.
 
     Args:
@@ -701,6 +707,7 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
         dry_run: Don't click Submit.
         use_base_resume: Apply with the master resume instead of a tailored one.
         agent: Apply runtime, "claude" or "openai".
+        verbose: Show step-level progress in supported apply runtimes.
 
     Returns:
         Tuple of (applied_count, failed_count).
@@ -759,6 +766,7 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
                     worker_id=worker_id,
                     dry_run=dry_run,
                     use_base_resume=use_base_resume,
+                    verbose=verbose,
                 )
             else:
                 result, duration_ms = run_job(
@@ -846,7 +854,8 @@ def main(limit: int = 1, target_url: str | None = None,
          dry_run: bool = False, continuous: bool = False,
          poll_interval: int = 60, workers: int = 1,
          use_base_resume: bool = False,
-         agent: str = "claude") -> None:
+         agent: str = "claude",
+         verbose: bool = False) -> None:
     """Launch the apply pipeline.
 
     Args:
@@ -863,6 +872,7 @@ def main(limit: int = 1, target_url: str | None = None,
         workers: Number of parallel workers (default 1).
         use_base_resume: Apply with the master resume instead of a tailored one.
         agent: Apply runtime, "claude" or "openai".
+        verbose: Show step-level progress in supported apply runtimes.
     """
     global POLL_INTERVAL
     POLL_INTERVAL = poll_interval
@@ -941,6 +951,7 @@ def main(limit: int = 1, target_url: str | None = None,
                     dry_run=dry_run,
                     use_base_resume=use_base_resume,
                     agent=agent,
+                    verbose=verbose,
                 )
             else:
                 # Multi-worker — distribute limit across workers
@@ -968,6 +979,7 @@ def main(limit: int = 1, target_url: str | None = None,
                             dry_run=dry_run,
                             use_base_resume=use_base_resume,
                             agent=agent,
+                            verbose=verbose,
                         ): i
                         for i in range(workers)
                     }

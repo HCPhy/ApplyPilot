@@ -75,6 +75,7 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
       - Apply:      applied_at, apply_status, apply_error, apply_attempts,
                    agent_id, last_attempted_at, apply_duration_ms, apply_task_id,
                    verification_confidence
+      - User triage: saved_at
 
     Args:
         db_path: Override the default DB_PATH.
@@ -132,7 +133,10 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
             last_attempted_at     TEXT,
             apply_duration_ms     INTEGER,
             apply_task_id         TEXT,
-            verification_confidence TEXT
+            verification_confidence TEXT,
+
+            -- User triage state
+            saved_at              TEXT
         )
     """)
     conn.commit()
@@ -186,6 +190,8 @@ _ALL_COLUMNS: dict[str, str] = {
     "apply_duration_ms": "INTEGER",
     "apply_task_id": "TEXT",
     "verification_confidence": "TEXT",
+    # User triage state
+    "saved_at": "TEXT",
 }
 
 
@@ -246,6 +252,10 @@ def ensure_indexes(conn: sqlite3.Connection | None = None) -> list[str]:
         "idx_jobs_posted_discovered": (
             "CREATE INDEX IF NOT EXISTS idx_jobs_posted_discovered "
             "ON jobs(posted_at, discovered_at)"
+        ),
+        "idx_jobs_saved_at": (
+            "CREATE INDEX IF NOT EXISTS idx_jobs_saved_at "
+            "ON jobs(saved_at)"
         ),
     }
 
