@@ -373,6 +373,7 @@ def get_stats(conn: sqlite3.Connection | None = None) -> dict:
         "SELECT COUNT(*) FROM jobs "
         "WHERE tailored_resume_path IS NOT NULL "
         "AND applied_at IS NULL "
+        "AND COALESCE(apply_status, '') IN ('', 'failed') "
         "AND application_url IS NOT NULL"
     ).fetchone()[0]
 
@@ -508,6 +509,7 @@ def get_jobs_by_stage(conn: sqlite3.Connection | None = None,
         "tailored": "tailored_resume_path IS NOT NULL",
         "pending_apply": (
             "tailored_resume_path IS NOT NULL AND applied_at IS NULL "
+            "AND COALESCE(apply_status, '') IN ('', 'failed') "
             "AND application_url IS NOT NULL"
         ),
         "applied": "applied_at IS NOT NULL",

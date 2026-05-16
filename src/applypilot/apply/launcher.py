@@ -350,7 +350,8 @@ def reset_failed() -> int:
                        apply_attempts = 0, agent_id = NULL
         WHERE apply_status = 'failed'
           OR (apply_status IS NOT NULL AND apply_status != 'applied'
-              AND apply_status != 'in_progress')
+              AND apply_status != 'in_progress'
+              AND apply_status != 'not_suitable')
     """)
     conn.commit()
     return cursor.rowcount

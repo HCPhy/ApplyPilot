@@ -18,6 +18,10 @@ boards:
     name: "Anduril Industries"
     board_token: "andurilindustries"
 
+  anthropic:
+    name: "Anthropic"
+    board_token: "anthropic"
+
   aquatic_capital:
     name: "Aquatic Capital"
     board_token: "aquaticcapitalmanagement"

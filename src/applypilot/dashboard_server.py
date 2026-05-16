@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from applypilot.view import (
     load_dashboard_data,
     mark_job_applied,
+    mark_job_not_suitable,
     mark_job_saved,
     render_dashboard_html,
 )
@@ -92,6 +93,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             applied_at = mark_job_applied(url)
             self._send_json({"ok": True, "applied_at": applied_at})
+            return
+
+        if self.path == "/api/jobs/not-suitable":
+            url = str(payload.get("url") or "").strip()
+            not_suitable = bool(payload.get("not_suitable"))
+            if not url:
+                self._send_json({"ok": False, "error": "missing_url"}, status=400)
+                return
+            marked_at = mark_job_not_suitable(url, not_suitable=not_suitable)
+            self._send_json({"ok": True, "not_suitable": not_suitable, "not_suitable_at": marked_at or ""})
             return
 
         self._send_json({"ok": False, "error": "not_found"}, status=404)

@@ -82,6 +82,10 @@ def _is_db_applied(applied_at: str | None, apply_status: str | None) -> bool:
     return bool(applied_at) or (apply_status or "").strip() == "applied"
 
 
+def _is_db_not_suitable(apply_status: str | None) -> bool:
+    return (apply_status or "").strip() == "not_suitable"
+
+
 def _score_distribution(conn: sqlite3.Connection) -> dict[int, int]:
     score_dist: dict[int, int] = {}
     rows = conn.execute(
@@ -119,20 +123,76 @@ def load_dashboard_data(max_jobs: int = 0) -> dict:
             "WHERE applied_at IS NOT NULL OR apply_status = 'applied'"
         ).fetchone()[0]
     )
-    saved = int(
+    not_suitable = int(
         conn.execute(
-            "SELECT COUNT(*) FROM jobs "
-            "WHERE saved_at IS NOT NULL "
-            "AND applied_at IS NULL "
-            "AND COALESCE(apply_status, '') != 'applied'"
+            """
+            WITH latest_seen AS (
+                SELECT COALESCE(site, '') AS site_key,
+                       COALESCE(strategy, '') AS strategy_key,
+                       MAX(last_seen_at) AS latest_seen_at
+                FROM jobs
+                WHERE last_seen_at IS NOT NULL
+                GROUP BY COALESCE(site, ''), COALESCE(strategy, '')
+            )
+            SELECT COUNT(*)
+            FROM jobs
+            LEFT JOIN latest_seen
+              ON latest_seen.site_key = COALESCE(jobs.site, '')
+             AND latest_seen.strategy_key = COALESCE(jobs.strategy, '')
+            WHERE applied_at IS NULL
+              AND COALESCE(apply_status, '') != 'applied'
+              AND (
+                apply_status = 'not_suitable'
+                OR (
+                  latest_seen.latest_seen_at IS NOT NULL
+                  AND (jobs.last_seen_at IS NULL OR jobs.last_seen_at != latest_seen.latest_seen_at)
+                  AND COALESCE(apply_status, '') != 'in_progress'
+                )
+              )
+            """
         ).fetchone()[0]
     )
-    active = total - applied
+    saved = int(
+        conn.execute(
+            """
+            WITH latest_seen AS (
+                SELECT COALESCE(site, '') AS site_key,
+                       COALESCE(strategy, '') AS strategy_key,
+                       MAX(last_seen_at) AS latest_seen_at
+                FROM jobs
+                WHERE last_seen_at IS NOT NULL
+                GROUP BY COALESCE(site, ''), COALESCE(strategy, '')
+            )
+            SELECT COUNT(*)
+            FROM jobs
+            LEFT JOIN latest_seen
+              ON latest_seen.site_key = COALESCE(jobs.site, '')
+             AND latest_seen.strategy_key = COALESCE(jobs.strategy, '')
+            WHERE saved_at IS NOT NULL
+              AND applied_at IS NULL
+              AND COALESCE(apply_status, '') NOT IN ('applied', 'not_suitable')
+              AND NOT (
+                latest_seen.latest_seen_at IS NOT NULL
+                AND (jobs.last_seen_at IS NULL OR jobs.last_seen_at != latest_seen.latest_seen_at)
+                AND COALESCE(apply_status, '') != 'in_progress'
+              )
+            """
+        ).fetchone()[0]
+    )
+    active = total - applied - not_suitable
 
     score_dist = _score_distribution(conn)
 
     site_stats = conn.execute(
         """
+        WITH latest_seen AS (
+            SELECT COALESCE(site, '') AS site_key,
+                   COALESCE(strategy, '') AS strategy_key,
+                   MAX(last_seen_at) AS latest_seen_at
+            FROM jobs
+            WHERE last_seen_at IS NOT NULL
+            GROUP BY COALESCE(site, ''), COALESCE(strategy, '')
+        )
         SELECT site,
                COUNT(*) AS total,
                SUM(CASE WHEN fit_score >= 7 THEN 1 ELSE 0 END) AS high_fit,
@@ -141,12 +201,31 @@ def load_dashboard_data(max_jobs: int = 0) -> dict:
                SUM(CASE WHEN fit_score IS NULL THEN 1 ELSE 0 END) AS unscored,
                SUM(CASE WHEN saved_at IS NOT NULL
                          AND applied_at IS NULL
-                         AND COALESCE(apply_status, '') != 'applied'
+                         AND COALESCE(apply_status, '') NOT IN ('applied', 'not_suitable')
+                         AND NOT (
+                           latest_seen.latest_seen_at IS NOT NULL
+                           AND (jobs.last_seen_at IS NULL OR jobs.last_seen_at != latest_seen.latest_seen_at)
+                           AND COALESCE(apply_status, '') != 'in_progress'
+                         )
                         THEN 1 ELSE 0 END) AS saved,
                SUM(CASE WHEN applied_at IS NOT NULL OR apply_status = 'applied' THEN 1 ELSE 0 END) AS applied,
+               SUM(CASE WHEN applied_at IS NULL
+                         AND COALESCE(apply_status, '') != 'applied'
+                         AND (
+                           apply_status = 'not_suitable'
+                           OR (
+                             latest_seen.latest_seen_at IS NOT NULL
+                             AND (jobs.last_seen_at IS NULL OR jobs.last_seen_at != latest_seen.latest_seen_at)
+                             AND COALESCE(apply_status, '') != 'in_progress'
+                           )
+                         )
+                        THEN 1 ELSE 0 END) AS not_suitable,
                SUM(CASE WHEN apply_status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress,
                ROUND(AVG(CASE WHEN fit_score > 0 THEN fit_score END), 1) AS avg_score
         FROM jobs
+        LEFT JOIN latest_seen
+          ON latest_seen.site_key = COALESCE(jobs.site, '')
+         AND latest_seen.strategy_key = COALESCE(jobs.strategy, '')
         GROUP BY site
         ORDER BY high_fit DESC, total DESC
         """
@@ -191,6 +270,7 @@ def load_dashboard_data(max_jobs: int = 0) -> dict:
         score = row["fit_score"] or 0
         apply_status = (row["apply_status"] or "").strip()
         is_applied = _is_db_applied(row["applied_at"], apply_status)
+        is_not_suitable = _is_db_not_suitable(apply_status)
         is_in_progress = apply_status == "in_progress"
         latest_seen_at = row["latest_seen_at"]
         last_seen_at = row["last_seen_at"]
@@ -230,6 +310,7 @@ def load_dashboard_data(max_jobs: int = 0) -> dict:
                 "applyStatus": apply_status,
                 "applyError": (row["apply_error"] or "")[:120],
                 "dbApplied": is_applied,
+                "dbNotSuitable": is_not_suitable,
                 "savedAt": row["saved_at"] or "",
                 "isStale": is_stale,
                 "lastSeenAt": last_seen_at or "",
@@ -253,6 +334,7 @@ def load_dashboard_data(max_jobs: int = 0) -> dict:
         "scored": scored,
         "high_fit": high_fit,
         "applied": applied,
+        "not_suitable": not_suitable,
         "saved": saved,
         "active": active,
         "score_dist": score_dist,
@@ -295,6 +377,41 @@ def mark_job_applied(url: str) -> str:
     return applied_at
 
 
+def mark_job_not_suitable(url: str, not_suitable: bool = True) -> str | None:
+    """Persist or clear the Not Suitable triage marker for one job."""
+    conn = _dashboard_connection()
+    if not_suitable:
+        marked_at = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+            UPDATE jobs
+            SET apply_status = 'not_suitable',
+                applied_at = NULL,
+                apply_error = NULL,
+                agent_id = NULL,
+                saved_at = NULL
+            WHERE url = ?
+            """,
+            (url,),
+        )
+        conn.commit()
+        return marked_at
+
+    conn.execute(
+        """
+        UPDATE jobs
+        SET apply_status = NULL,
+            apply_error = NULL,
+            agent_id = NULL
+        WHERE url = ?
+          AND apply_status = 'not_suitable'
+        """,
+        (url,),
+    )
+    conn.commit()
+    return None
+
+
 def _score_bars_html(score_dist: dict[int, int]) -> str:
     score_bars = ""
     max_count = max(score_dist.values()) if score_dist else 1
@@ -329,7 +446,7 @@ def _firm_rows_html(site_stats) -> str:
           <input type="checkbox" class="firm-checkbox" value="{escape(site)}" data-firm-checkbox style="accent-color:{color}">
           <span class="firm-row-copy">
             <span class="site-name" style="color:{color}">{escape(site)}</span>
-            <span class="site-nums">{stat['total']} jobs &middot; {stat['high_fit']} strong fit &middot; {stat['saved']} todo &middot; {stat['applied']} applied &middot; avg score {avg}</span>
+            <span class="site-nums">{stat['total']} jobs &middot; {stat['high_fit']} strong fit &middot; {stat['saved']} todo &middot; {stat['not_suitable']} not suitable &middot; {stat['applied']} applied &middot; avg score {avg}</span>
             <span class="bar-track">
               <span class="bar-fill" style="width:{stat['high_fit']/max(stat['total'], 1)*100}%;background:{color}"></span>
               <span class="bar-fill" style="width:{stat['mid_fit']/max(stat['total'], 1)*100}%;background:{color}66"></span>
@@ -356,7 +473,7 @@ def render_dashboard_html(data: dict, *, api_enabled: bool = False) -> str:
         f"{data['high_fit']} strong matches (7+)",
     ]
     if api_enabled:
-        subtitle_bits.append("interactive mode saves Todo/Applied to SQLite")
+        subtitle_bits.append("interactive mode saves Todo/Not Suitable/Applied to SQLite")
     subtitle = " &middot; ".join(subtitle_bits)
     api_enabled_js = "true" if api_enabled else "false"
 
@@ -379,6 +496,7 @@ def render_dashboard_html(data: dict, *, api_enabled: bool = False) -> str:
   .stat-total .stat-num {{ color: #e2e8f0; }}
   .stat-active .stat-num {{ color: #c4b5fd; }}
   .stat-todo .stat-num {{ color: #fbbf24; }}
+  .stat-not-suitable .stat-num {{ color: #fb7185; }}
   .stat-ready .stat-num {{ color: #10b981; }}
   .stat-scored .stat-num {{ color: #60a5fa; }}
   .stat-high .stat-num {{ color: #f59e0b; }}
@@ -443,6 +561,7 @@ def render_dashboard_html(data: dict, *, api_enabled: bool = False) -> str:
   .job-card.is-viewed {{ box-shadow: inset 0 0 0 1px #60a5fa33; }}
   .job-card.is-applied {{ background: linear-gradient(180deg, #132a23 0%, #1e293b 22%); }}
   .job-card.is-saved {{ box-shadow: inset 0 0 0 1px #f59e0b33; }}
+  .job-card.is-not-suitable {{ background: linear-gradient(180deg, #2b1720 0%, #1e293b 24%); }}
   .job-card[data-score="9"], .job-card[data-score="10"] {{ border-left-color: #10b981; }}
   .job-card[data-score="8"] {{ border-left-color: #34d399; }}
   .job-card[data-score="7"] {{ border-left-color: #60a5fa; }}
@@ -464,6 +583,7 @@ def render_dashboard_html(data: dict, *, api_enabled: bool = False) -> str:
   .status-chip.viewed {{ background: #1e3a5f; color: #93c5fd; }}
   .status-chip.stale {{ background: #422006; color: #fcd34d; }}
   .status-chip.todo {{ background: #3b2f06; color: #fde68a; }}
+  .status-chip.not-suitable {{ background: #4c0519; color: #fda4af; }}
 
   .meta-row {{ display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.4rem; }}
   .meta-tag {{ font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 4px; background: #334155; color: #94a3b8; }}
@@ -482,6 +602,7 @@ def render_dashboard_html(data: dict, *, api_enabled: bool = False) -> str:
   .card-btn {{ background: #334155; border: 1px solid #475569; color: #e2e8f0; }}
   .card-btn:hover {{ background: #475569; }}
   .card-btn.todo-active {{ border-color: #f59e0b; color: #fde68a; }}
+  .card-btn.not-suitable-active {{ border-color: #fb7185; color: #fecdd3; }}
 
   .modal-backdrop {{ position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 1.5rem; background: #020617cc; backdrop-filter: blur(6px); }}
   .modal-card {{ width: min(420px, 100%); border: 1px solid #334155; border-radius: 16px; background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%); box-shadow: 0 24px 80px #00000088; padding: 1.4rem; }}
@@ -518,6 +639,7 @@ def render_dashboard_html(data: dict, *, api_enabled: bool = False) -> str:
   <div class="stat-card stat-total"><div class="stat-num">{data['total']}</div><div class="stat-label">Total Jobs</div></div>
   <div class="stat-card stat-active"><div id="active-stat" class="stat-num">{data['active']}</div><div class="stat-label">Active Jobs</div></div>
   <div class="stat-card stat-todo"><div id="todo-stat" class="stat-num">{data['saved']}</div><div class="stat-label">Todo Jobs</div></div>
+  <div class="stat-card stat-not-suitable"><div id="not-suitable-stat" class="stat-num">{data['not_suitable']}</div><div class="stat-label">Not Suitable</div></div>
   <div class="stat-card stat-ready"><div class="stat-num">{data['ready']}</div><div class="stat-label">Ready (desc + URL)</div></div>
   <div class="stat-card stat-scored"><div class="stat-num">{data['scored']}</div><div class="stat-label">Scored by LLM</div></div>
   <div class="stat-card stat-high"><div class="stat-num">{data['high_fit']}</div><div class="stat-label">Strong Fit (7+)</div></div>
@@ -527,6 +649,7 @@ def render_dashboard_html(data: dict, *, api_enabled: bool = False) -> str:
 <div class="view-tabs" aria-label="Dashboard views">
   <button type="button" class="view-tab active" data-bucket-tab="all" onclick="setBucket('all')">All <span id="bucket-count-all" class="tab-count"></span></button>
   <button type="button" class="view-tab" data-bucket-tab="todo" onclick="setBucket('todo')">Todo <span id="bucket-count-todo" class="tab-count"></span></button>
+  <button type="button" class="view-tab" data-bucket-tab="not_suitable" onclick="setBucket('not_suitable')">Not Suitable <span id="bucket-count-not-suitable" class="tab-count"></span></button>
   <button type="button" class="view-tab" data-bucket-tab="applied" onclick="setBucket('applied')">Applied <span id="bucket-count-applied" class="tab-count"></span></button>
 </div>
 
@@ -615,10 +738,12 @@ let pendingApplyUrl = '';
 const VIEWED_STORAGE_KEY = 'applypilot.dashboard.viewedJobs.v1';
 const LOCAL_TODO_STORAGE_KEY = 'applypilot.dashboard.todoJobs.v1';
 const LOCAL_APPLIED_STORAGE_KEY = 'applypilot.dashboard.manualApplied.v2';
-const FILTER_STORAGE_KEY = 'applypilot.dashboard.filters.v3';
+const LOCAL_NOT_SUITABLE_STORAGE_KEY = 'applypilot.dashboard.notSuitableJobs.v1';
+const FILTER_STORAGE_KEY = 'applypilot.dashboard.filters.v4';
 const viewedJobs = new Set();
 const localTodoJobs = new Set();
 const localAppliedJobs = new Set();
+const localNotSuitableJobs = new Set();
 
 function loadViewedJobs() {{
   try {{
@@ -667,7 +792,7 @@ function loadFilters() {{
     selectedFirms = Array.isArray(saved.selectedFirms) ? normalizeFirmList(saved.selectedFirms) : [];
     sortOrder = saved.sortOrder || 'newest';
     showStale = Boolean(saved.showStale);
-    currentBucket = ['all', 'todo', 'applied'].includes(saved.currentBucket) ? saved.currentBucket : 'all';
+    currentBucket = ['all', 'todo', 'not_suitable', 'applied'].includes(saved.currentBucket) ? saved.currentBucket : 'all';
   }} catch (err) {{
     console.warn('Could not load dashboard filters', err);
   }}
@@ -701,28 +826,42 @@ function findJob(url) {{
 }}
 
 function isSavedJob(job) {{
-  return API_ENABLED ? Boolean(job.savedAt) : localTodoJobs.has(job.url);
+  const saved = API_ENABLED ? Boolean(job.savedAt) : localTodoJobs.has(job.url);
+  return saved && !isAppliedJob(job) && !isNotSuitableJob(job);
 }}
 
 function isAppliedJob(job) {{
   return Boolean(job.dbApplied) || (!API_ENABLED && localAppliedJobs.has(job.url));
 }}
 
+function isManuallyNotSuitableJob(job) {{
+  return Boolean(job.dbNotSuitable) || (!API_ENABLED && localNotSuitableJobs.has(job.url));
+}}
+
+function isNotSuitableJob(job) {{
+  return !isAppliedJob(job) && (isManuallyNotSuitableJob(job) || Boolean(job.isStale));
+}}
+
 function updateOverviewStats() {{
-  const activeCount = JOBS.filter(job => !isAppliedJob(job)).length;
-  const todoCount = JOBS.filter(job => isSavedJob(job) && !isAppliedJob(job)).length;
+  const activeCount = JOBS.filter(job => !isAppliedJob(job) && !isNotSuitableJob(job)).length;
+  const todoCount = JOBS.filter(isSavedJob).length;
+  const notSuitableCount = JOBS.filter(isNotSuitableJob).length;
   const appliedCount = JOBS.filter(isAppliedJob).length;
   const activeStat = document.getElementById('active-stat');
   const todoStat = document.getElementById('todo-stat');
+  const notSuitableStat = document.getElementById('not-suitable-stat');
   const appliedStat = document.getElementById('applied-stat');
   if (activeStat) activeStat.textContent = activeCount;
   if (todoStat) todoStat.textContent = todoCount;
+  if (notSuitableStat) notSuitableStat.textContent = notSuitableCount;
   if (appliedStat) appliedStat.textContent = appliedCount;
   const allTab = document.getElementById('bucket-count-all');
   const todoTab = document.getElementById('bucket-count-todo');
+  const notSuitableTab = document.getElementById('bucket-count-not-suitable');
   const appliedTab = document.getElementById('bucket-count-applied');
   if (allTab) allTab.textContent = `(${{activeCount}})`;
   if (todoTab) todoTab.textContent = `(${{todoCount}})`;
+  if (notSuitableTab) notSuitableTab.textContent = `(${{notSuitableCount}})`;
   if (appliedTab) appliedTab.textContent = `(${{appliedCount}})`;
 }}
 
@@ -757,7 +896,7 @@ async function postJson(path, payload) {{
 
 async function toggleTodo(url) {{
   const job = findJob(url);
-  if (!job || isAppliedJob(job)) return;
+  if (!job || isAppliedJob(job) || isNotSuitableJob(job)) return;
   const nextSaved = !isSavedJob(job);
   if (API_ENABLED) {{
     try {{
@@ -783,6 +922,7 @@ async function markApplied(url) {{
     try {{
       const result = await postJson('/api/jobs/applied', {{ url }});
       job.dbApplied = true;
+      job.dbNotSuitable = false;
       job.applyStatus = 'applied';
       job.savedAt = '';
       job.appliedAt = result.applied_at || '';
@@ -793,7 +933,38 @@ async function markApplied(url) {{
   }} else {{
     localAppliedJobs.add(url);
     localTodoJobs.delete(url);
+    localNotSuitableJobs.delete(url);
     saveLocalSet(LOCAL_APPLIED_STORAGE_KEY, localAppliedJobs);
+    saveLocalSet(LOCAL_TODO_STORAGE_KEY, localTodoJobs);
+    saveLocalSet(LOCAL_NOT_SUITABLE_STORAGE_KEY, localNotSuitableJobs);
+  }}
+  updateOverviewStats();
+  applyFilters();
+}}
+
+async function toggleNotSuitable(url) {{
+  const job = findJob(url);
+  if (!job || isAppliedJob(job)) return;
+  const nextNotSuitable = !isManuallyNotSuitableJob(job);
+  if (API_ENABLED) {{
+    try {{
+      const result = await postJson('/api/jobs/not-suitable', {{ url, not_suitable: nextNotSuitable }});
+      job.dbNotSuitable = Boolean(result.not_suitable);
+      job.applyStatus = job.dbNotSuitable ? 'not_suitable' : '';
+      job.savedAt = '';
+      job.appliedAt = '';
+    }} catch (err) {{
+      console.warn('Could not update not suitable state', err);
+      return;
+    }}
+  }} else {{
+    if (nextNotSuitable) {{
+      localNotSuitableJobs.add(url);
+      localTodoJobs.delete(url);
+    }} else {{
+      localNotSuitableJobs.delete(url);
+    }}
+    saveLocalSet(LOCAL_NOT_SUITABLE_STORAGE_KEY, localNotSuitableJobs);
     saveLocalSet(LOCAL_TODO_STORAGE_KEY, localTodoJobs);
   }}
   updateOverviewStats();
@@ -911,19 +1082,27 @@ function syncStaleToggle() {{
   const button = document.getElementById('stale-toggle');
   if (!button) return;
   const appliedBucket = currentBucket === 'applied';
-  button.disabled = appliedBucket;
-  button.classList.toggle('active', showStale && !appliedBucket);
-  button.textContent = appliedBucket ? 'Stale off for applied' : (showStale ? 'Hide stale' : 'Show stale');
+  const notSuitableBucket = currentBucket === 'not_suitable';
+  const lockedBucket = appliedBucket || notSuitableBucket;
+  button.disabled = lockedBucket;
+  button.classList.toggle('active', showStale && !lockedBucket);
+  button.textContent = appliedBucket
+    ? 'Stale off for applied'
+    : notSuitableBucket
+      ? 'Stale included'
+      : (showStale ? 'Hide stale' : 'Show stale');
   const summary = document.getElementById('stale-filter-summary');
   if (summary) {{
     summary.textContent = appliedBucket
       ? 'Applied jobs ignore stale filtering'
+      : notSuitableBucket
+        ? 'Not Suitable includes stale postings'
       : (showStale ? 'Including stale postings' : 'Current postings only');
   }}
 }}
 
 function toggleStale() {{
-  if (currentBucket === 'applied') return;
+  if (currentBucket === 'applied' || currentBucket === 'not_suitable') return;
   showStale = !showStale;
   currentPage = 1;
   saveFilters();
@@ -946,6 +1125,8 @@ function syncBucketTabs() {{
   if (heading) {{
     heading.textContent = currentBucket === 'todo'
       ? 'Todo Jobs'
+      : currentBucket === 'not_suitable'
+        ? 'Not Suitable Jobs'
       : currentBucket === 'applied'
         ? 'Applied Jobs'
         : 'All Jobs';
@@ -953,6 +1134,8 @@ function syncBucketTabs() {{
   if (description) {{
     description.textContent = currentBucket === 'todo'
       ? 'Jobs you explicitly set aside for later. Todo jobs stay in SQLite in interactive mode and in local browser storage in snapshot mode.'
+      : currentBucket === 'not_suitable'
+        ? 'Jobs marked as not suitable, plus stale postings that were not seen in the latest crawl.'
       : currentBucket === 'applied'
         ? 'Jobs already marked as applied. This view ignores stale filtering so your history stays intact.'
         : 'Uses ATS posted/updated dates when available, then falls back to discovery time. Cards render 100 per page.{data["load_note"]}';
@@ -1007,11 +1190,15 @@ function renderStatusChips(job, isViewed) {{
   const chips = [];
   const applied = isAppliedJob(job);
   const saved = isSavedJob(job);
+  const manuallyNotSuitable = isManuallyNotSuitableJob(job);
   if (job.isStale && !applied) {{
     const title = job.lastSeenAt
       ? `Last seen ${{escapeHtml(job.lastSeenAt)}}; latest crawl ${{escapeHtml(job.latestSeenAt || '')}}`
       : `Not seen in latest ${{escapeHtml(job.site || 'firm')}} crawl`;
     chips.push(`<span class="status-chip stale" title="${{title}}">Stale</span>`);
+  }}
+  if (manuallyNotSuitable && !applied) {{
+    chips.push('<span class="status-chip not-suitable">Not suitable</span>');
   }}
   if (saved && !applied) {{
     chips.push('<span class="status-chip todo">Todo</span>');
@@ -1024,6 +1211,8 @@ function renderStatusChips(job, isViewed) {{
     chips.push(`<span class="status-chip failed" title="${{escapeHtml(job.applyError || '')}}">Apply failed</span>`);
   }} else if (job.applyStatus === 'manual') {{
     chips.push('<span class="status-chip manual">Manual ATS</span>');
+  }} else if (job.applyStatus === 'not_suitable') {{
+    // Already represented by the triage chip above.
   }}
   if (isViewed) {{
     chips.push('<span class="status-chip viewed" data-viewed-badge>Viewed</span>');
@@ -1035,6 +1224,8 @@ function renderJobCard(job) {{
   const score = Number(job.score) || 0;
   const isApplied = isAppliedJob(job);
   const isSaved = isSavedJob(job);
+  const isNotSuitable = isNotSuitableJob(job);
+  const isManuallyNotSuitable = isManuallyNotSuitableJob(job);
   const isViewed = viewedJobs.has(job.url);
   const siteColor = job.siteColor || '#6b7280';
   const statusHtml = renderStatusChips(job, isViewed);
@@ -1046,12 +1237,15 @@ function renderJobCard(job) {{
   const applyHtml = !isApplied && job.applyUrl
     ? `<a href="${{escapeHtml(job.applyUrl)}}" class="apply-link" target="_blank" rel="noreferrer">Apply</a>`
     : (job.applyUrl ? `<a href="${{escapeHtml(job.applyUrl)}}" class="apply-link" target="_blank" rel="noreferrer">Open Apply URL</a>` : '');
-  const todoButton = !isApplied
+  const todoButton = !isApplied && !isNotSuitable
     ? `<button type="button" class="card-btn${{isSaved ? ' todo-active' : ''}}" data-action="toggle-todo" data-url="${{escapeHtml(job.url)}}">${{isSaved ? 'Remove Todo' : 'Add to Todo'}}</button>`
+    : '';
+  const notSuitableButton = !isApplied
+    ? `<button type="button" class="card-btn${{isManuallyNotSuitable ? ' not-suitable-active' : ''}}" data-action="toggle-not-suitable" data-url="${{escapeHtml(job.url)}}">${{isManuallyNotSuitable ? 'Clear Not Suitable' : 'Not Suitable'}}</button>`
     : '';
 
   return `
-    <div class="job-card${{isApplied ? ' is-applied' : ''}}${{isSaved ? ' is-saved' : ''}}${{isViewed ? ' is-viewed' : ''}}"
+    <div class="job-card${{isApplied ? ' is-applied' : ''}}${{isSaved ? ' is-saved' : ''}}${{isNotSuitable ? ' is-not-suitable' : ''}}${{isViewed ? ' is-viewed' : ''}}"
       data-score="${{score}}"
       data-url="${{escapeHtml(job.url)}}">
       <div class="card-header">
@@ -1070,6 +1264,7 @@ function renderJobCard(job) {{
       ${{descHtml}}
       <div class="card-footer">
         ${{todoButton}}
+        ${{notSuitableButton}}
         ${{applyHtml}}
       </div>
     </div>`;
@@ -1101,15 +1296,18 @@ function applyFilters() {{
   const scopedJobs = JOBS.filter(job => {{
     const firm = job.site || '';
     const firmMatch = selected.size === 0 || selected.has(firm);
-    const staleMatch = currentBucket === 'applied' || showStale || !job.isStale;
+    const staleMatch = currentBucket === 'applied' || currentBucket === 'not_suitable' || showStale || !job.isStale;
     return firmMatch && staleMatch;
   }});
   const bucketJobs = scopedJobs.filter(job => {{
     const applied = isAppliedJob(job);
     const saved = isSavedJob(job);
+    const notSuitable = isNotSuitableJob(job);
+    const manualNotSuitable = isManuallyNotSuitableJob(job);
     if (currentBucket === 'todo') return saved && !applied;
+    if (currentBucket === 'not_suitable') return notSuitable;
     if (currentBucket === 'applied') return applied;
-    return !applied;
+    return !applied && !manualNotSuitable;
   }});
   currentJobs = sortJobList(bucketJobs.filter(job => {{
     const score = Number(job.score) || 0;
@@ -1125,11 +1323,15 @@ function applyFilters() {{
       : `${{selectedFirms.length}} firms`;
   const bucketLabel = currentBucket === 'todo'
     ? 'todo jobs'
+    : currentBucket === 'not_suitable'
+      ? 'not suitable jobs'
     : currentBucket === 'applied'
       ? 'applied jobs'
       : 'active jobs';
   const staleLabel = currentBucket === 'applied'
     ? 'stale filter ignored'
+    : currentBucket === 'not_suitable'
+      ? 'stale included'
     : (showStale ? 'including stale' : 'current only');
   document.getElementById('job-count').textContent = `Showing ${{currentJobs.length}} of ${{bucketJobs.length}} ${{bucketLabel}} in scope · ${{firmLabel}} · ${{staleLabel}} · 100 per page`;
   renderCurrentPage();
@@ -1157,6 +1359,12 @@ function initGridActions() {{
       await toggleTodo(actionBtn.dataset.url || '');
       return;
     }}
+    const notSuitableBtn = event.target.closest('[data-action="toggle-not-suitable"]');
+    if (notSuitableBtn) {{
+      event.preventDefault();
+      await toggleNotSuitable(notSuitableBtn.dataset.url || '');
+      return;
+    }}
     const link = event.target.closest('a');
     if (!link) return;
     const card = link.closest('.job-card');
@@ -1182,6 +1390,7 @@ function initControls() {{
   if (!API_ENABLED) {{
     loadLocalSet(LOCAL_TODO_STORAGE_KEY, localTodoJobs);
     loadLocalSet(LOCAL_APPLIED_STORAGE_KEY, localAppliedJobs);
+    loadLocalSet(LOCAL_NOT_SUITABLE_STORAGE_KEY, localNotSuitableJobs);
   }}
   document.querySelector('.search-input').value = searchText;
   const sortSelect = document.getElementById('sort-order');

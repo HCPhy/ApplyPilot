@@ -372,12 +372,18 @@ def apply(
                     f"Expected text file at [bold]{_resume_path}[/bold]."
                 )
             ready = conn.execute(
-                "SELECT COUNT(*) FROM jobs WHERE fit_score >= ? AND applied_at IS NULL",
+                "SELECT COUNT(*) FROM jobs "
+                "WHERE fit_score >= ? "
+                "AND applied_at IS NULL "
+                "AND COALESCE(apply_status, '') IN ('', 'failed')",
                 (min_score,),
             ).fetchone()[0]
         else:
             ready = conn.execute(
-                "SELECT COUNT(*) FROM jobs WHERE tailored_resume_path IS NOT NULL AND applied_at IS NULL"
+                "SELECT COUNT(*) FROM jobs "
+                "WHERE tailored_resume_path IS NOT NULL "
+                "AND applied_at IS NULL "
+                "AND COALESCE(apply_status, '') IN ('', 'failed')"
             ).fetchone()[0]
         if ready == 0:
             if use_base_resume:

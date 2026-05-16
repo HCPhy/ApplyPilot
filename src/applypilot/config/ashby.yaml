@@ -54,6 +54,10 @@ boards:
     name: "Perplexity"
     job_board_name: "perplexity"
 
+  sandboxaq:
+    name: "SandboxAQ"
+    job_board_name: "sandboxaq"
+
   vanta:
     name: "Vanta"
     job_board_name: "vanta"

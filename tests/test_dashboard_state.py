@@ -5,6 +5,7 @@ from applypilot.database import close_connection, get_connection, init_db
 from applypilot.view import (
     load_dashboard_data,
     mark_job_applied,
+    mark_job_not_suitable,
     mark_job_saved,
     render_dashboard_html,
 )
@@ -66,37 +67,77 @@ def test_mark_job_saved_and_applied_updates_sqlite_state(tmp_path, monkeypatch):
     assert row["applied_at"] == applied_at
     assert row["apply_status"] == "applied"
 
+    _insert_job(conn, "https://example.com/jobs/2")
+    conn.commit()
+    mark_job_saved("https://example.com/jobs/2", saved=True)
+    not_suitable_at = mark_job_not_suitable("https://example.com/jobs/2", not_suitable=True)
+    row = get_connection(db_path).execute(
+        "SELECT saved_at, applied_at, apply_status FROM jobs WHERE url = ?",
+        ("https://example.com/jobs/2",),
+    ).fetchone()
+    assert not_suitable_at
+    assert row["saved_at"] is None
+    assert row["applied_at"] is None
+    assert row["apply_status"] == "not_suitable"
+
+    assert mark_job_not_suitable("https://example.com/jobs/2", not_suitable=False) is None
+    row = get_connection(db_path).execute(
+        "SELECT apply_status FROM jobs WHERE url = ?",
+        ("https://example.com/jobs/2",),
+    ).fetchone()
+    assert row["apply_status"] is None
+
     close_connection(db_path)
 
 
-def test_dashboard_data_and_html_include_all_todo_applied_views(tmp_path, monkeypatch):
+def test_dashboard_data_and_html_include_all_todo_not_suitable_applied_views(tmp_path, monkeypatch):
     db_path = Path(tmp_path) / "applypilot.db"
     monkeypatch.setattr(database, "DB_PATH", db_path)
     conn = init_db(db_path)
     _insert_job(conn, "https://example.com/jobs/open", title="Open Job")
     _insert_job(conn, "https://example.com/jobs/todo", title="Todo Job")
+    _insert_job(conn, "https://example.com/jobs/not-suitable", title="Not Suitable Job")
     _insert_job(conn, "https://example.com/jobs/applied", title="Applied Job")
+    _insert_job(conn, "https://example.com/jobs/stale", title="Stale Job", site="OldCo", strategy="lever")
+    _insert_job(conn, "https://example.com/jobs/fresh", title="Fresh Job", site="OldCo", strategy="lever")
     conn.execute(
         "UPDATE jobs SET saved_at = ? WHERE url = ?",
         ("2026-04-21T00:00:00+00:00", "https://example.com/jobs/todo"),
     )
     conn.execute(
+        "UPDATE jobs SET apply_status = 'not_suitable' WHERE url = ?",
+        ("https://example.com/jobs/not-suitable",),
+    )
+    conn.execute(
         "UPDATE jobs SET apply_status = 'applied', applied_at = ? WHERE url = ?",
         ("2026-04-21T00:00:00+00:00", "https://example.com/jobs/applied"),
+    )
+    conn.execute(
+        "UPDATE jobs SET last_seen_at = ? WHERE url = ?",
+        ("2026-04-20T00:00:00+00:00", "https://example.com/jobs/stale"),
+    )
+    conn.execute(
+        "UPDATE jobs SET last_seen_at = ? WHERE url = ?",
+        ("2026-04-22T00:00:00+00:00", "https://example.com/jobs/fresh"),
     )
     conn.commit()
 
     data = load_dashboard_data()
-    assert data["total"] == 3
+    assert data["total"] == 6
     assert data["saved"] == 1
     assert data["applied"] == 1
+    assert data["not_suitable"] == 2
     assert any(job["savedAt"] for job in data["jobs"] if job["url"].endswith("/todo"))
+    assert any(job["dbNotSuitable"] for job in data["jobs"] if job["url"].endswith("/not-suitable"))
+    assert any(job["isStale"] for job in data["jobs"] if job["url"].endswith("/stale"))
 
     html = render_dashboard_html(data, api_enabled=True)
     assert 'data-bucket-tab="all"' in html
     assert 'data-bucket-tab="todo"' in html
+    assert 'data-bucket-tab="not_suitable"' in html
     assert 'data-bucket-tab="applied"' in html
     assert "/api/jobs/todo" in html
+    assert "/api/jobs/not-suitable" in html
     assert "/api/jobs/applied" in html
 
     close_connection(db_path)
